@@ -307,10 +307,10 @@ header{padding:12px 20px;background:linear-gradient(90deg,#1a1f2b,#13161d);borde
 header b{font-size:17px;letter-spacing:.3px}
 nav{display:flex;gap:6px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;
  position:sticky;top:49px;z-index:7}
-nav button{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:20px;padding:7px 14px;cursor:pointer;
+nav button{background:var(--panel2);color:var(--mut);border:1px solid var(--line);border-radius:8px;padding:7px 14px;cursor:pointer;
  font-size:13px;transition:.15s}
-nav button:hover{color:var(--txt);background:var(--panel2)}
-nav button.on{background:var(--accent);color:#fff;box-shadow:0 2px 10px rgba(59,130,246,.4)}
+nav button:hover{color:var(--txt);border-color:#3a4356}
+nav button.on{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 2px 10px rgba(59,130,246,.35)}
 .layout{display:flex;align-items:flex-start}main{padding:20px 24px;flex:1;min-width:0}
 aside{width:330px;border-left:1px solid var(--line);padding:16px;background:var(--panel);min-height:92vh;position:sticky;top:97px}
 #outs div{font-size:12px;padding:2px 0}#outs .ok{color:#34d399}#outs .no{color:#5a6273}

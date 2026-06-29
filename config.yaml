@@ -20,13 +20,13 @@ persons:
 - id: p0
   name: 男舞者
   seed_point:
-  - 820
-  - 360
+  - 700
+  - 300
 - id: p1
   name: 女舞者
   seed_point:
-  - 470
-  - 380
+  - 830
+  - 280
 garments:
   cloth1: cloth1.jpg
   cloth2: cloth2.jpg
@@ -106,7 +106,8 @@ compositing:
   bg_blur: 0
   feather_px: 2
 models:
-  sam2: models/sam2
+  sam2: models/sam2/sam2.1_hiera_small.pt
+  sam2_cfg: configs/sam2.1/sam2.1_hiera_s.yaml
   ic_light: models/ic-light
   controlnet_pose: models/controlnet-openpose
   controlnet_depth: models/controlnet-depth

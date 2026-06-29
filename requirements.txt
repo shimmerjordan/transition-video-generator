@@ -13,9 +13,12 @@ matplotlib            # 仅 S1 --plot 可视化时需要,可选
 fastapi
 uvicorn[standard]
 
-# --- S3 抠像(后续)---
-# torch               # 装与本机 CUDA 匹配的版本(见 PLAN「环境搭建」)
-# 'sam2 @ git+https://github.com/facebookresearch/sam2.git'
+# --- S3 抠像(SAM2,GPU,已接入)---
+# torch/torchvision 需按显卡装 CUDA 版(不要用默认 CPU 版):
+#   RTX 50 系(Blackwell)用 cu128:
+#   pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
+sam2
+huggingface_hub        # 下载权重(国内设 HF_ENDPOINT=https://hf-mirror.com)
 
 # --- S5 换装 / S6 重打光(后续)---
 # diffusers

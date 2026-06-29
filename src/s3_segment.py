@@ -1,13 +1,13 @@
-"""S3 抠像:在锁定域上为每帧生成主体 alpha matte。
+"""S3 抠像:在锁定域上为每帧生成主体 alpha;按人物身份(p0/p1…)输出 per-person alpha。
 
-两种方法(config.segment.method):
-    median : 时序中值背景差分(默认,无需 GPU/模型)。因 S2 已把画面锁定,
-             背景近似静止,对多帧取中值即得干净背景,差分即得运动主体——
-             这是离线即可用的真实抠像,适合先把整条管线跑通。
-    sam2   : SAM 2 视频分割(质量升级,需模型权重 + 提示点)。当前为占位,
-             选中而不可用时回退 median。
+方法(config.segment.method):
+    sam2   : SAM 2 视频分割(GPU)。用每个人物的 seed_point 作点提示 → 时序追踪 →
+             每人一条 alpha 轨迹 + 并集 alpha。换装按人需要它。
+    median : 时序中值背景差分(无 GPU,仅并集,合成/测试用)。
 
-输出:data/work/alpha/seg_{id}/f{idx:05d}.png(单通道 0-255 alpha)
+输出:
+    data/work/alpha/seg_<id>/f*.png        并集 alpha(单通道 0-255)
+    data/work/alpha/seg_<id>/p<k>/f*.png   每个人物的 alpha(sam2 才有)
 """
 from __future__ import annotations
 
@@ -15,6 +15,7 @@ import argparse
 import glob
 import os
 import sys
+import tempfile
 
 import cv2
 import numpy as np
@@ -33,58 +34,141 @@ def _load_locked(work_root: str, sid: int) -> tuple[list[np.ndarray], list[str]]
     return [video.imread(p) for p in paths], paths
 
 
+def _feather(m: np.ndarray, feather: int) -> np.ndarray:
+    if feather > 0:
+        k = feather * 2 + 1
+        m = cv2.GaussianBlur(m, (k, k), 0)
+    return m
+
+
+# ---------------- median(无 GPU 回退)----------------
+
 def matte_median(frames: list[np.ndarray], thresh: int, feather: int) -> list[np.ndarray]:
-    """时序中值背景差分 → 主体 alpha。"""
     stack = np.stack(frames).astype(np.float32)
-    bg = np.median(stack, axis=0)  # HxWx3 背景估计
-    alphas = []
+    bg = np.median(stack, axis=0)
     k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    out = []
     for f in frames:
-        diff = np.linalg.norm(f.astype(np.float32) - bg, axis=2)  # 颜色距离
+        diff = np.linalg.norm(f.astype(np.float32) - bg, axis=2)
         m = (diff > thresh).astype(np.uint8) * 255
-        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k, iterations=1)
-        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, iterations=2)
-        # 取最大若干连通域,去噪点
-        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, connectivity=8)
+        m = cv2.morphologyEx(m, cv2.MORPH_OPEN, k, 1)
+        m = cv2.morphologyEx(m, cv2.MORPH_CLOSE, k, 2)
+        n, lab, stats, _ = cv2.connectedComponentsWithStats(m, 8)
         if n > 1:
-            areas = stats[1:, cv2.CC_STAT_AREA]
-            keep = np.where(areas >= max(80, int(0.0005 * m.size)))[0] + 1
+            keep = np.where(stats[1:, cv2.CC_STAT_AREA] >= max(80, int(0.0005 * m.size)))[0] + 1
             m = np.isin(lab, keep).astype(np.uint8) * 255
-        if feather > 0:
-            kf = feather * 2 + 1
-            m = cv2.GaussianBlur(m, (kf, kf), 0)
-        alphas.append(m)
-    return alphas
+        out.append(_feather(m, feather))
+    return out
 
 
-def matte_sam2(frames, model_dir):  # pragma: no cover - 占位
-    raise NotImplementedError(
-        "SAM2 抠像尚未接入。请安装 sam2 与权重后在此实现视频分割;"
-        "当前请使用 config.segment.method=median。"
-    )
+# ---------------- SAM2(GPU 真抠像)----------------
 
+def _sam2_predictor(cfg: dict):
+    """构建 SAM2 视频预测器。返回 (predictor, device)。"""
+    import torch
+    from sam2.build_sam import build_sam2_video_predictor
+
+    ckpt = resolve_path(cfg, get(cfg, "models.sam2", "models/sam2/sam2.1_hiera_small.pt"))
+    cfg_name = get(cfg, "models.sam2_cfg", "configs/sam2.1/sam2.1_hiera_s.yaml")
+    if not os.path.isfile(ckpt):
+        raise FileNotFoundError(f"SAM2 权重缺失:{ckpt}(见 README 下载)")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    predictor = build_sam2_video_predictor(cfg_name, ckpt, device=device)
+    return predictor, device
+
+
+def matte_sam2(cfg: dict, frames: list[np.ndarray], persons: list[dict],
+               feather: int) -> tuple[list[np.ndarray], dict[str, list[np.ndarray]]]:
+    """用各人物 seed_point 作点提示,SAM2 视频追踪 → 每人 alpha + 并集。"""
+    import torch
+
+    predictor, device = _sam2_predictor(cfg)
+    h, w = frames[0].shape[:2]
+
+    # SAM2 视频接口需要一个按整数命名的 JPEG 帧目录
+    tmp = tempfile.mkdtemp(prefix="sam2_")
+    try:
+        for i, f in enumerate(frames):
+            cv2.imwrite(os.path.join(tmp, f"{i}.jpg"), f)
+
+        autocast = torch.autocast(device_type="cuda", dtype=torch.bfloat16) \
+            if device == "cuda" else _nullctx()
+        with torch.inference_mode(), autocast:
+            state = predictor.init_state(video_path=tmp)
+            valid = []
+            for k, p in enumerate(persons):
+                sp = p.get("seed_point")
+                if not sp:
+                    continue
+                pts = np.array([sp], dtype=np.float32)
+                lbl = np.array([1], dtype=np.int32)
+                predictor.add_new_points_or_box(inference_state=state, frame_idx=0,
+                                                obj_id=k, points=pts, labels=lbl)
+                valid.append((k, p.get("id", f"p{k}")))
+
+            per_obj = {k: [None] * len(frames) for k, _ in valid}
+            for fidx, obj_ids, mask_logits in predictor.propagate_in_video(state):
+                for j, oid in enumerate(obj_ids):
+                    m = (mask_logits[j] > 0.0).squeeze().cpu().numpy().astype(np.uint8) * 255
+                    if m.shape != (h, w):
+                        m = cv2.resize(m, (w, h), interpolation=cv2.INTER_NEAREST)
+                    if oid in per_obj:
+                        per_obj[oid][fidx] = m
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    per_person: dict[str, list[np.ndarray]] = {}
+    union = [np.zeros((h, w), np.uint8) for _ in frames]
+    for k, pid in valid:
+        seq = [(_feather(m, feather) if m is not None else np.zeros((h, w), np.uint8))
+               for m in per_obj[k]]
+        per_person[pid] = seq
+        for i, m in enumerate(seq):
+            union[i] = np.maximum(union[i], m)
+    return union, per_person
+
+
+class _nullctx:
+    def __enter__(self): return self
+    def __exit__(self, *a): return False
+
+
+# ---------------- 调度 ----------------
 
 def process_segment(cfg: dict, sid: int, work_root: str, method: str) -> dict:
     frames, _ = _load_locked(work_root, sid)
-    thresh = int(get(cfg, "segment.diff_thresh", 28))
     feather = int(get(cfg, "compositing.feather_px", 2))
+    out_dir = os.path.join(work_root, "alpha", f"seg_{sid}")
+    video.ensure_dir(out_dir)
+    persons = get(cfg, "persons", []) or []
+    per_person = {}
 
     if method == "sam2":
         try:
-            alphas = matte_sam2(frames, resolve_path(cfg, get(cfg, "models.sam2", "models/sam2")))
-        except NotImplementedError as e:
-            print(f"[s3][告警] {e}\n[s3] 回退 median")
-            alphas = matte_median(frames, thresh, feather)
+            union, per_person = matte_sam2(cfg, frames, persons, feather)
+            used = "sam2"
+        except Exception as e:
+            print(f"[s3][告警] SAM2 不可用({type(e).__name__}: {e})\n[s3] 回退 median")
+            union = matte_median(frames, int(get(cfg, "segment.diff_thresh", 28)), feather)
+            used = "median(fallback)"
     else:
-        alphas = matte_median(frames, thresh, feather)
+        union = matte_median(frames, int(get(cfg, "segment.diff_thresh", 28)), feather)
+        used = "median"
 
-    out_dir = os.path.join(work_root, "alpha", f"seg_{sid}")
-    video.ensure_dir(out_dir)
-    for i, a in enumerate(alphas):
+    for i, a in enumerate(union):
         video.imwrite(os.path.join(out_dir, f"f{i:05d}.png"), a)
-    cov = float(np.mean([a.mean() / 255.0 for a in alphas]))
-    print(f"[s3] 段 {sid}: {len(alphas)} 帧 alpha → {out_dir}(平均覆盖 {cov:.1%})")
-    return {"segment": sid, "frames": len(alphas), "alpha_dir": out_dir, "coverage": cov}
+    for pid, seq in per_person.items():
+        pd = os.path.join(out_dir, pid)
+        video.ensure_dir(pd)
+        for i, a in enumerate(seq):
+            video.imwrite(os.path.join(pd, f"f{i:05d}.png"), a)
+
+    cov = float(np.mean([a.mean() / 255.0 for a in union])) if union else 0.0
+    who = ",".join(per_person.keys()) or "(无 per-person)"
+    print(f"[s3] 段 {sid}: {len(union)} 帧 alpha → {out_dir}({used};覆盖 {cov:.1%};人物 {who})")
+    return {"segment": sid, "frames": len(union), "alpha_dir": out_dir,
+            "coverage": cov, "method": used, "persons": list(per_person.keys())}
 
 
 def run(config_path: str | None, only_segment: int | None) -> list[dict]:
@@ -104,7 +188,7 @@ def run(config_path: str | None, only_segment: int | None) -> list[dict]:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="S3 抠像")
+    ap = argparse.ArgumentParser(description="S3 抠像(SAM2 / median)")
     ap.add_argument("--config", default=None)
     ap.add_argument("--segment", type=int, default=None)
     args = ap.parse_args()
