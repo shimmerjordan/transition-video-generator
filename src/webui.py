@@ -1,7 +1,6 @@
 """Web 配置前端(FastAPI):全部配置与操作在网页完成,config.yaml 仅作后台存储。
 
-按创作流程分 6 个阶段:
-  0 素材(去水印/剪辑分段) · 1 时间线(切换点→背景) · 2 换背景 · 3 换装 · 4 灯光 · 5 细节/出片
+阶段:0 裁剪/分段(时间轨道) · 去水印(画面框选) · 1 时间线 · 2 换背景 · 3 换装 · 4 灯光 · 5 出片
 另有「高级」原始 YAML 兜底。
 
 启动:.venv/Scripts/python src/webui.py   →  http://127.0.0.1:8800
@@ -136,10 +135,9 @@ def frame_at(file: str, t: float = 0.0):
 
 @app.get("/api/suggest_beats")
 def suggest_beats(subdivide: int = 1, source: str = "music"):
-    """用音乐(或源片音轨)生成卡点建议(切换点,不含 0/结尾)。"""
     cfg = load_config(CONFIG_PATH)
     audio = _resolve_media(cfg, get(cfg, "input.music", "")) if source == "music" else None
-    if not audio:  # 回退:从源片抽音轨
+    if not audio:
         src = _resolve_media(cfg, get(cfg, "input.source", ""))
         if not src:
             return JSONResponse({"error": "找不到音乐,也找不到源片"}, status_code=404)
@@ -242,8 +240,8 @@ header b{font-size:16px}
 nav{display:flex;gap:4px;padding:8px 14px;background:#13161c;border-bottom:1px solid #2a2f3a;flex-wrap:wrap}
 nav button{background:#222733;color:#ccd;border:1px solid #2a2f3a;border-radius:6px;padding:6px 12px;cursor:pointer}
 nav button.on{background:#2d6cdf;color:#fff}
-.layout{display:flex}main{padding:16px;max-width:760px;flex:1}
-aside{width:300px;border-left:1px solid #2a2f3a;padding:12px;background:#13161c;min-height:90vh}
+.layout{display:flex}main{padding:16px;max-width:820px;flex:1}
+aside{width:280px;border-left:1px solid #2a2f3a;padding:12px;background:#13161c;min-height:90vh}
 .tab{display:none}.tab.on{display:block}
 h2{margin:4px 0 12px;font-size:18px}h3{margin:14px 0 6px}
 .row{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
@@ -260,31 +258,40 @@ table{border-collapse:collapse;margin:6px 0}td,th{border-bottom:1px solid #2a2f3
 font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
 textarea{width:100%;height:430px;background:#0b0d12;color:#cfe;border:1px solid #2a2f3a;border-radius:6px;
 font-family:Consolas,monospace;font-size:12px;padding:8px}
+.hint{color:#8a93a6;font-size:12px}video{max-width:100%;border-radius:6px}
+/* 时间轨道 */
+.track{position:relative;height:48px;background:#0b0d12;border:1px solid #2a2f3a;border-radius:6px;margin:8px 0 4px;overflow:hidden;user-select:none}
+.tick{position:absolute;top:0;font-size:10px;color:#566;border-left:1px solid #1d2530;padding-left:2px;height:100%;pointer-events:none}
+.blk{position:absolute;top:9px;height:30px;background:rgba(45,108,223,.55);border:1px solid #2d6cdf;border-radius:4px;cursor:grab;display:flex;align-items:center;justify-content:center;min-width:14px}
+.blk .lbl{font-size:11px;color:#fff;pointer-events:none;white-space:nowrap}
+.hl,.hr{position:absolute;top:0;width:9px;height:100%;cursor:ew-resize;background:#5b8def}
+.hl{left:0;border-radius:4px 0 0 4px}.hr{right:0;border-radius:0 4px 4px 0}
+.blk .del{position:absolute;top:-8px;right:-6px;background:#a33;border:0;color:#fff;border-radius:9px;padding:0 5px;cursor:pointer;font-size:11px}
+.prev{height:150px;border:1px solid #2a2f3a;border-radius:6px;background:#000}
+#wmcanvas{border:1px solid #2a2f3a;border-radius:6px;cursor:crosshair;max-width:100%;touch-action:none}
 #picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9}
 #pkbox{background:#171a21;border:1px solid #2a2f3a;border-radius:8px;padding:14px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
 #pkimg{max-width:100%;cursor:crosshair;border:1px solid #2a2f3a}
-.hint{color:#8a93a6;font-size:12px}video{max-width:100%;border-radius:6px}
 </style>
 <header><b>🎬 转场视频生成器</b><button onclick=save()>💾 保存全部</button><span id=msg class=hint></span></header>
 <nav id=nav></nav>
 <div class=layout>
 <main>
- <div class=tab id=t_p0></div>
+ <div class=tab id=t_clip></div>
+ <div class=tab id=t_wm></div>
  <div class=tab id=t_p1></div>
  <div class=tab id=t_p2></div>
  <div class=tab id=t_p3></div>
  <div class=tab id=t_p4></div>
  <div class=tab id=t_p5></div>
  <div class=tab id=t_adv>
-   <h2>高级:原始 YAML</h2>
-   <p class=hint>结构化表单的兜底。注意「保存全部」会重写本文件并丢失注释。</p>
+   <h2>高级:原始 YAML</h2><p class=hint>「保存全部」会重写本文件并丢失注释。</p>
    <textarea id=rawcfg></textarea>
    <div><button onclick=saveRaw()>保存 YAML</button><button class=alt onclick=loadRaw()>重载</button></div>
  </div>
 </main>
 <aside>
- <h3>运行 / 状态</h3>
- <div class=row>段(留空=全部):<input id=seg size=4 placeholder=all></div>
+ <h3>运行 / 状态</h3><div class=row>段(留空=全部):<input id=seg size=4 placeholder=all></div>
  <table id=steps></table>
  <h3>日志 <span id=runflag class=hint></span></h3><div id=log></div>
 </aside>
@@ -298,112 +305,175 @@ font-family:Consolas,monospace;font-size:12px;padding:8px}
 <script>
 const G=id=>document.getElementById(id);
 let CFG={},ASSETS={images:[],videos:[]},_picker=null;
-const TABS=[['p0','0·素材去水印/分段'],['p1','1·时间线'],['p2','2·换背景'],
- ['p3','3·换装'],['p4','4·灯光'],['p5','5·细节/出片'],['adv','高级']];
+let WMV={name:null,kind:'watermarks',t:2,img:null,scale:1};
+const TABS=[['clip','0·裁剪/分段'],['wm','去水印'],['p1','1·时间线'],['p2','2·换背景'],
+ ['p3','3·换装'],['p4','4·灯光'],['p5','5·出片'],['adv','高级']];
 
 function buildNav(){G('nav').innerHTML=TABS.map(([k,n])=>`<button id=nav_${k} onclick=showTab('${k}')>${n}</button>`).join('');}
 function showTab(k){TABS.forEach(([t])=>{G('t_'+t).classList.toggle('on',t==k);G('nav_'+t).classList.toggle('on',t==k);});
- if(k=='adv')loadRaw();}
+ if(k=='adv')loadRaw();if(k=='wm')wmInit();}
 function msg(s){G('msg').textContent=s;setTimeout(()=>G('msg').textContent='',4000);}
 function sel(opts,val,bind){return `<select onchange="${bind}=this.value">`+
+ opts.map(o=>`<option ${o==val?'selected':''}>${o}</option>`).join('')+`</select>`;}
+function selFn(opts,val,fn){return `<select onchange="${fn}(this.value)">`+
  opts.map(o=>`<option ${o==val?'selected':''}>${o}</option>`).join('')+`</select>`;}
 function vidOpts(val,bind){let o=['',...ASSETS.videos.map(v=>v.name)];
  return `<select onchange="${bind}=this.value">`+o.map(n=>`<option ${n==val?'selected':''}>${n}</option>`).join('')+`</select>`;}
 function imgOpts(val,bind){let o=['',...ASSETS.images];
  return `<select onchange="${bind}=this.value">`+o.map(n=>`<option ${n==val?'selected':''}>${n}</option>`).join('')+`</select>`;}
 function num(val,bind,sz){return `<input type=number value="${val}" onchange="${bind}=+this.value" size=${sz||5}>`;}
+function r1(x){return Math.round(x*10)/10;}
+function durOf(name){let f=(CFG.backgrounds[name]||{}).file;let v=ASSETS.videos.find(x=>x.name==f);return (v&&v.duration)||30;}
 
 async function boot(){buildNav();
  CFG=await (await fetch('/api/config.json')).json();
  ASSETS=await (await fetch('/api/assets')).json();
- renderAll();showTab('p0');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);refresh();}
-function renderAll(){G('t_p0').innerHTML=secInputs()+secBackgrounds();
+ renderAll();showTab('clip');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);refresh();}
+function renderAll(){
+ G('t_clip').innerHTML=secInputs()+secClips();
+ G('t_wm').innerHTML=secWatermark();
  G('t_p1').innerHTML=secTimeline();
  G('t_p2').innerHTML=secPersons()+secProvider('matte','抠像')+secGround()+runBtn('▶ 运行换背景','2,3,4,7,8');
  G('t_p3').innerHTML=secProvider('garment','换装')+secGarmentSched()+runBtn('▶ 运行换装','5');
  G('t_p4').innerHTML=secProvider('relight','灯光')+secRelight()+runBtn('▶ 运行灯光','6');
- G('t_p5').innerHTML=secComposite()+runBtn('▶ 合成出片','7,8')+secFinal();}
+ G('t_p5').innerHTML=secComposite()+runBtn('▶ 合成出片','7,8')+secFinal();
+ wmInit();}
 async function save(){let r=await fetch('/api/config.json',{method:'POST',headers:{'Content-Type':'application/json'},
  body:JSON.stringify(CFG)});let j=await r.json();
  if(j.ok){msg('✓ 已保存');CFG=await (await fetch('/api/config.json')).json();ASSETS=await (await fetch('/api/assets')).json();renderAll();}
  else msg('✗ '+j.error);}
 
-/* ---- 阶段0:素材 ---- */
-function secInputs(){let inp=CFG.input=CFG.input||{};return `<h2>0 · 素材(路径 + 去水印/剪辑)</h2>
- <p class=phasehint>选好源片/音乐/目录,并为每个背景定义子片段、框选去水印/字幕。动态路人去除请把 cleanup 设为 product。</p>
- <div class=sub><h3>输入路径</h3>
+/* ---- 输入路径 ---- */
+function secInputs(){let inp=CFG.input=CFG.input||{};return `<h2>0 · 裁剪 / 分段</h2>
+ <p class=phasehint>拖动片段块移动、拖两端手柄改起止;拖动时上方预览该时刻画面,不用回视频里数秒。</p>
+ <div class=sub><h3>素材路径</h3>
  <div class=row><label>source</label><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=42></div>
  <div class=row><label>music</label><input value="${inp.music||''}" onchange="CFG.input.music=this.value" size=42></div>
  <div class=row><label>背景目录</label><input value="${inp.backgrounds_dir||''}" onchange="CFG.input.backgrounds_dir=this.value" size=42></div>
  <div class=row><label>服装目录</label><input value="${inp.garments_dir||''}" onchange="CFG.input.garments_dir=this.value" size=42></div></div>`;}
 
-function secBackgrounds(){CFG.backgrounds=CFG.backgrounds||{};let h='<div class=sub><h3>背景素材(去水印 + 子片段)</h3>';
- for(const name of Object.keys(CFG.backgrounds)){let b=CFG.backgrounds[name];b.clips=b.clips||[];b.cleanup=b.cleanup||{};
-  let dur=(ASSETS.videos.find(v=>v.name==b.file)||{}).duration;
-  h+=`<div class=sub><div class=row><b>${name}</b> 文件:${vidOpts(b.file,`CFG.backgrounds['${name}'].file`)}`+
-   (dur?`<span class=hint>时长 ${dur}s</span>`:'')+
-   ` <button class=alt onclick="delete CFG.backgrounds['${name}'];renderAll()">删背景</button></div>
-   <div>子片段<table><tr><th>id</th><th>起s</th><th>止s</th><th></th></tr>`;
-  b.clips.forEach((c,j)=>{let r=c.range||[0,0];h+=`<tr>
-   <td><input value="${c.id||''}" onchange="CFG.backgrounds['${name}'].clips[${j}].id=this.value" size=10></td>
-   <td>${num(r[0],`CFG.backgrounds['${name}'].clips[${j}].range[0]`)}</td>
-   <td>${num(r[1],`CFG.backgrounds['${name}'].clips[${j}].range[1]`)}</td>
-   <td><button class=alt onclick="CFG.backgrounds['${name}'].clips.splice(${j},1);renderAll()">删</button></td></tr>`;});
-  h+=`</table><button class=alt onclick="CFG.backgrounds['${name}'].clips.push({id:'${name}_'+CFG.backgrounds['${name}'].clips.length,range:[0,5]});renderAll()">+ 子片段</button></div>`;
-  h+=cleanupUI(name,'watermarks','水印')+cleanupUI(name,'subtitles','字幕')+`</div>`;}
- h+=`<div class=row>新增背景名:<input id=nbgname size=8> 文件:${vidOpts('','window._nbg')}<button onclick=addBg()>+ 背景</button></div></div>`;
+/* ---- 裁剪:时间轨道 ---- */
+function secClips(){CFG.backgrounds=CFG.backgrounds||{};
+ let h=`<div class=sub><div class=row><img id=clipprev class=prev src=""><span class=hint id=clipprevlbl>拖动片段查看该时刻</span></div></div>`;
+ for(const name of Object.keys(CFG.backgrounds)){let b=CFG.backgrounds[name];b.clips=b.clips||[];let dur=durOf(name);
+  h+=`<div class=sub><div class=row><b>${name}</b> 文件:${vidOpts(b.file,`CFG.backgrounds['${name}'].file`)} <span class=hint>时长 ${dur}s</span>
+   <button class=alt onclick="delete CFG.backgrounds['${name}'];renderAll();showTab('clip')">删背景</button></div>
+   <div class=track id=trk_${name}>`;
+  let step=Math.max(1,Math.round(dur/10));
+  for(let s=0;s<=dur;s+=step)h+=`<span class=tick style=left:${s/dur*100}%>${s}</span>`;
+  b.clips.forEach((c,j)=>{c.range=c.range||[0,5];let l=c.range[0]/dur*100,w=(c.range[1]-c.range[0])/dur*100;
+   h+=`<div class=blk id="blk_${name}_${j}" style="left:${l}%;width:${w}%" onpointerdown="startDrag(event,'${name}',${j},'move')">
+    <div class=hl onpointerdown="event.stopPropagation();startDrag(event,'${name}',${j},'l')"></div>
+    <span class=lbl>${r1(c.range[0])}~${r1(c.range[1])}s</span>
+    <div class=hr onpointerdown="event.stopPropagation();startDrag(event,'${name}',${j},'r')"></div>
+    <button class=del onclick="event.stopPropagation();CFG.backgrounds['${name}'].clips.splice(${j},1);renderAll();showTab('clip')">×</button></div>`;});
+  h+=`</div><table>`;
+  b.clips.forEach((c,j)=>{h+=`<tr><td>id <input value="${c.id||''}" onchange="CFG.backgrounds['${name}'].clips[${j}].id=this.value" size=10></td>
+   <td>起 <input type=number value="${c.range[0]}" onchange="CFG.backgrounds['${name}'].clips[${j}].range[0]=+this.value;renderAll();showTab('clip')" size=5></td>
+   <td>止 <input type=number value="${c.range[1]}" onchange="CFG.backgrounds['${name}'].clips[${j}].range[1]=+this.value;renderAll();showTab('clip')" size=5></td></tr>`;});
+  h+=`</table><button class=alt onclick="addClip('${name}')">+ 片段</button></div>`;}
+ h+=`<div class=sub><div class=row>新增背景名:<input id=nbgname size=8> 文件:${vidOpts('','window._nbg')}<button onclick=addBg()>+ 背景</button></div></div>`;
  return h;}
-function cleanupUI(name,kind,label){let arr=(CFG.backgrounds[name].cleanup[kind]=CFG.backgrounds[name].cleanup[kind]||[]);
- let h=`<div style=margin-top:6px>去${label}(x0,y0,x1,y1)<table>`;
- arr.forEach((r,k)=>{h+=`<tr><td><input value="${r.join(',')}" onchange="CFG.backgrounds['${name}'].cleanup['${kind}'][${k}]=this.value.split(',').map(Number)" size=18></td>
-  <td><button class=alt onclick="CFG.backgrounds['${name}'].cleanup['${kind}'].splice(${k},1);renderAll()">删</button></td></tr>`;});
- h+=`</table><button class=alt onclick="pickRect('${name}','${kind}')">框选添加(点两角)</button></div>`;return h;}
+function addClip(name){let cs=CFG.backgrounds[name].clips,dur=durOf(name);
+ let st=cs.length?Math.min(dur-2,cs[cs.length-1].range[1]||0):0;
+ cs.push({id:name+'_'+cs.length,range:[r1(st),r1(Math.min(dur,st+5))]});renderAll();showTab('clip');}
 function addBg(){let n=G('nbgname').value.trim();if(!n||!window._nbg){msg('填名并选文件');return;}
- CFG.backgrounds[n]={file:window._nbg,clips:[],cleanup:{watermarks:[],subtitles:[],movers:[]}};window._nbg='';renderAll();}
+ CFG.backgrounds[n]={file:window._nbg,clips:[],cleanup:{watermarks:[],subtitles:[],movers:[]}};window._nbg='';renderAll();showTab('clip');}
+let _pvt=0;
+function previewAt(name,t){let now=Date.now();if(now-_pvt<110)return;_pvt=now;
+ G('clipprev').src='/api/frame_at?file='+encodeURIComponent(CFG.backgrounds[name].file)+'&t='+t+'&_='+now;
+ G('clipprevlbl').textContent=name+' @ '+r1(t)+'s';}
+function layoutBlk(name,j){let dur=durOf(name),c=CFG.backgrounds[name].clips[j],b=G('blk_'+name+'_'+j);
+ if(b){b.style.left=(c.range[0]/dur*100)+'%';b.style.width=((c.range[1]-c.range[0])/dur*100)+'%';
+  let lbl=b.querySelector('.lbl');if(lbl)lbl.textContent=r1(c.range[0])+'~'+r1(c.range[1])+'s';}}
+function startDrag(e,name,j,mode){e.preventDefault();
+ let track=G('trk_'+name),dur=durOf(name),pxs=track.clientWidth/dur;
+ let clip=CFG.backgrounds[name].clips[j],sx=e.clientX,o=[clip.range[0],clip.range[1]];
+ function mv(ev){let d=(ev.clientX-sx)/pxs;
+  if(mode=='move'){let len=o[1]-o[0],ns=Math.max(0,Math.min(o[0]+d,dur-len));clip.range=[r1(ns),r1(ns+len)];}
+  else if(mode=='l'){clip.range[0]=Math.max(0,Math.min(r1(o[0]+d),clip.range[1]-0.2));}
+  else if(mode=='r'){clip.range[1]=Math.min(dur,Math.max(r1(o[1]+d),clip.range[0]+0.2));}
+  layoutBlk(name,j);previewAt(name,mode=='r'?clip.range[1]:clip.range[0]);}
+ function up(){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);renderAll();showTab('clip');}
+ document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}
+
+/* ---- 去水印:画面框选 + 显示矩形 ---- */
+function secWatermark(){let names=Object.keys(CFG.backgrounds||{});
+ if(!WMV.name||!names.includes(WMV.name))WMV.name=names[0]||null;
+ if(!WMV.name)return `<h2>去水印 / 字幕</h2><p class=hint>先在「裁剪/分段」添加背景。</p>`;
+ let dur=durOf(WMV.name);
+ return `<h2>去水印 / 字幕</h2>
+ <p class=phasehint>选背景与类型,在画面上按住拖出矩形;红框=已选区域(可删)。运行时这些区域用本地 inpaint 抹除;动态路人请把 cleanup 设为 product。</p>
+ <div class=sub><div class=row>背景:${selFn(names,WMV.name,'wmSetVideo')} 类型:${selFn(['watermarks','subtitles'],WMV.kind,'wmSetKind')}</div>
+  <div class=row>时间:<input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.5 value=${WMV.t} oninput="WMV.t=+this.value;wmLoad()"> <span id=wmtl>${WMV.t}s</span></div>
+  <canvas id=wmcanvas width=720 height=405></canvas>
+  <div id=wmlist></div></div>`;}
+function wmSetVideo(v){WMV.name=v;renderAll();showTab('wm');}
+function wmSetKind(k){WMV.kind=k;renderAll();showTab('wm');}
+function wmInit(){if(!WMV.name||!CFG.backgrounds[WMV.name])return;
+ let b=CFG.backgrounds[WMV.name];b.cleanup=b.cleanup||{};b.cleanup[WMV.kind]=b.cleanup[WMV.kind]||[];
+ if(G('wmcanvas'))wmLoad();}
+function wmLoad(){if(!G('wmcanvas')||!WMV.name)return;if(G('wmtl'))G('wmtl').textContent=WMV.t+'s';
+ let img=new Image();img.onload=()=>{WMV.img=img;let cv=G('wmcanvas');let CW=Math.min(760,img.naturalWidth);
+  WMV.scale=CW/img.naturalWidth;cv.width=CW;cv.height=Math.round(img.naturalHeight*WMV.scale);wmAttach(cv);wmDraw();wmList();};
+ img.src='/api/frame_at?file='+encodeURIComponent(CFG.backgrounds[WMV.name].file)+'&t='+WMV.t+'&_='+Date.now();}
+function wmDraw(temp){let cv=G('wmcanvas');if(!cv)return;let ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
+ if(WMV.img)ctx.drawImage(WMV.img,0,0,cv.width,cv.height);
+ let arr=(CFG.backgrounds[WMV.name].cleanup[WMV.kind]||[]);ctx.lineWidth=2;ctx.strokeStyle='#ff4444';ctx.fillStyle='rgba(255,68,68,.25)';
+ arr.forEach(r=>{let x=r[0]*WMV.scale,y=r[1]*WMV.scale,w=(r[2]-r[0])*WMV.scale,hh=(r[3]-r[1])*WMV.scale;ctx.fillRect(x,y,w,hh);ctx.strokeRect(x,y,w,hh);});
+ if(temp){ctx.strokeStyle='#44ff88';ctx.lineWidth=2;ctx.strokeRect(temp.x,temp.y,temp.w,temp.h);}}
+function wmAttach(cv){if(cv._a)return;cv._a=1;let st=null;
+ cv.addEventListener('pointerdown',e=>{let r=cv.getBoundingClientRect();st={x:e.clientX-r.left,y:e.clientY-r.top};});
+ cv.addEventListener('pointermove',e=>{if(!st)return;let r=cv.getBoundingClientRect();let x=e.clientX-r.left,y=e.clientY-r.top;
+  wmDraw({x:Math.min(st.x,x),y:Math.min(st.y,y),w:Math.abs(x-st.x),h:Math.abs(y-st.y)});});
+ let fin=e=>{if(!st)return;let r=cv.getBoundingClientRect();let x=e.clientX-r.left,y=e.clientY-r.top;
+  let x0=Math.min(st.x,x)/WMV.scale,y0=Math.min(st.y,y)/WMV.scale,x1=Math.max(st.x,x)/WMV.scale,y1=Math.max(st.y,y)/WMV.scale;st=null;
+  if(Math.abs(x1-x0)<5||Math.abs(y1-y0)<5){wmDraw();return;}
+  CFG.backgrounds[WMV.name].cleanup[WMV.kind].push([Math.round(x0),Math.round(y0),Math.round(x1),Math.round(y1)]);wmDraw();wmList();};
+ cv.addEventListener('pointerup',fin);cv.addEventListener('pointerleave',fin);}
+function wmList(){let arr=(CFG.backgrounds[WMV.name].cleanup[WMV.kind]||[]);let h='<table>';
+ arr.forEach((r,k)=>{h+=`<tr><td>${r.join(', ')}</td><td><button class=alt onclick="CFG.backgrounds['${WMV.name}'].cleanup['${WMV.kind}'].splice(${k},1);wmDraw();wmList()">删</button></td></tr>`;});
+ h+='</table>';if(G('wmlist'))G('wmlist').innerHTML=h;}
 
 /* ---- 阶段1:时间线 ---- */
 function allClipIds(){let ids=[];for(const n in CFG.backgrounds)for(const c of (CFG.backgrounds[n].clips||[]))if(c.id)ids.push(c.id);return ids;}
-function secTimeline(){let b=CFG.beats=CFG.beats||{};b.override_seconds=b.override_seconds||[];b.detect=b.detect||'auto';
- CFG.segments=CFG.segments||[];let cuts=[...b.override_seconds].sort((x,y)=>x-y);
- let h=`<h2>1 · 时间线(自己制定:何时切到哪个背景)</h2>
- <p class=phasehint>切换点 = 背景切换的时刻。可「生成卡点建议」再手动增删;N 个切换点 = N+1 段,给每段选背景。</p>
+function secTimeline(){let b=CFG.beats=CFG.beats||{};b.override_seconds=b.override_seconds||[];CFG.segments=CFG.segments||[];
+ let cuts=[...b.override_seconds].sort((x,y)=>x-y);
+ let h=`<h2>1 · 时间线(何时切到哪个背景)</h2>
+ <p class=phasehint>切换点=背景切换时刻。可生成卡点建议再手动增删;N 个切换点 = N+1 段,给每段选背景。</p>
  <div class=sub><div class=row>每 N 拍切:${num(window._subdiv||1,'window._subdiv',3)}
-   <button class=alt onclick=suggestBeats()>🎵 生成卡点建议</button>
-   <span class=hint id=beatinfo></span></div>
-  <div class=row><b>切换点(秒)</b></div><table id=cuttbl>`;
+   <button class=alt onclick=suggestBeats()>🎵 生成卡点建议</button><span class=hint id=beatinfo></span></div>
+  <div class=row><b>切换点(秒)</b></div><table>`;
  cuts.forEach((t,i)=>{h+=`<tr><td>${num(t,`CFG.beats.override_seconds[${i}]`,6)}</td>
-  <td><button class=alt onclick="CFG.beats.override_seconds.splice(${i},1);renderAll()">删</button></td></tr>`;});
- h+=`</table><button class=alt onclick="CFG.beats.override_seconds.push(0);renderAll()">+ 切换点</button>
-  <button onclick=applyTimeline()>↻ 按切换点重建分段</button></div>`;
- // 分段→背景
- h+=`<div class=sub><h3>每段背景(共 ${CFG.segments.length} 段)</h3>`;
+  <td><button class=alt onclick="CFG.beats.override_seconds.splice(${i},1);renderAll();showTab('p1')">删</button></td></tr>`;});
+ h+=`</table><button class=alt onclick="CFG.beats.override_seconds.push(0);renderAll();showTab('p1')">+ 切换点</button>
+  <button onclick=applyTimeline()>↻ 按切换点重建分段</button></div>
+  <div class=sub><h3>每段背景(共 ${CFG.segments.length} 段)</h3>`;
  let clips=['',...allClipIds()];
  CFG.segments.forEach((s,i)=>{let a=i==0?0:cuts[i-1],z=i<cuts.length?cuts[i]:'结尾';
   h+=`<div class=row><label>段${s.id} [${a}~${z}s]</label>${sel(clips,s.background_clip||'',`CFG.segments[${i}].background_clip`)}</div>`;});
  h+=`</div><div class=row><label>转场</label>${sel(['hard_cut','crossfade','mask_wipe'],(CFG.project||{}).transition||'hard_cut','CFG.project.transition')}</div>`;
  return h;}
-async function suggestBeats(){let sd=window._subdiv||1;
- let j=await (await fetch('/api/suggest_beats?subdivide='+sd)).json();
- if(j.error){msg('✗ '+j.error);return;}
- CFG.beats=CFG.beats||{};CFG.beats.detect='manual';CFG.beats.override_seconds=j.cut_times;
- applyTimeline();G('beatinfo').textContent=`BPM≈${j.bpm}, 时长${j.duration}s, ${j.cut_times.length} 切换点`;}
+async function suggestBeats(){let sd=window._subdiv||1;let j=await (await fetch('/api/suggest_beats?subdivide='+sd)).json();
+ if(j.error){msg('✗ '+j.error);return;}CFG.beats=CFG.beats||{};CFG.beats.detect='manual';CFG.beats.override_seconds=j.cut_times;
+ applyTimeline();if(G('beatinfo'))G('beatinfo').textContent=`BPM≈${j.bpm}, ${j.duration}s, ${j.cut_times.length} 点`;}
 function applyTimeline(){let cuts=[...(CFG.beats.override_seconds||[])].sort((x,y)=>x-y);
  CFG.beats.override_seconds=cuts;CFG.beats.detect='manual';CFG.beats.include_start_end=true;
  let n=cuts.length+1,old=CFG.segments||[],ns=[];
- for(let i=0;i<n;i++){let o=old[i]||{};ns.push({id:i,background_clip:o.background_clip||'',
-  ground:o.ground||'as_is',garments:o.garments||{},light:o.light||{direction:'auto',color_temp:'auto',intensity:'auto'}});}
+ for(let i=0;i<n;i++){let o=old[i]||{};ns.push({id:i,background_clip:o.background_clip||'',ground:o.ground||'as_is',
+  garments:o.garments||{},light:o.light||{direction:'auto',color_temp:'auto',intensity:'auto'}});}
  CFG.segments=ns;renderAll();showTab('p1');}
 
 /* ---- 阶段2:换背景 ---- */
 function secPersons(){CFG.persons=CFG.persons||[];
- let h=`<h2>2 · 换背景</h2><p class=phasehint>设定人物(抠像用,「取点」在源片上单击)。运行将做:运镜对齐→抠像→背景平面→合成→出片。</p>
+ let h=`<h2>2 · 换背景</h2><p class=phasehint>设人物(「取点」在源片上单击)。运行:运镜对齐→抠像→背景平面→合成→出片。</p>
  <div class=sub><h3>人物</h3><table><tr><th>id</th><th>名称</th><th>seed_point</th><th></th></tr>`;
  CFG.persons.forEach((p,i)=>{h+=`<tr><td><input value="${p.id||''}" onchange="CFG.persons[${i}].id=this.value" size=4></td>
   <td><input value="${p.name||''}" onchange="CFG.persons[${i}].name=this.value" size=8></td>
   <td><input value="${(p.seed_point||[]).join(',')}" onchange="CFG.persons[${i}].seed_point=this.value.split(',').map(Number)" size=10>
    <button class=alt onclick=pickPoint(${i})>取点</button></td>
-  <td><button class=alt onclick="CFG.persons.splice(${i},1);renderAll()">删</button></td></tr>`;});
- h+=`</table><button onclick="CFG.persons.push({id:'p'+CFG.persons.length,name:'',seed_point:[0,0]});renderAll()">+ 人物</button></div>`;
+  <td><button class=alt onclick="CFG.persons.splice(${i},1);renderAll();showTab('p2')">删</button></td></tr>`;});
+ h+=`</table><button onclick="CFG.persons.push({id:'p'+CFG.persons.length,name:'',seed_point:[0,0]});renderAll();showTab('p2')">+ 人物</button></div>`;
  return h;}
 function secGround(){CFG.segments=CFG.segments||[];let h='<div class=sub><h3>每段地面策略</h3>';
  if(!CFG.segments.length)h+='<span class=hint>先在「时间线」建分段</span>';
@@ -416,7 +486,7 @@ function secGarmentSched(){CFG.garments=CFG.garments||{};CFG.segments=CFG.segmen
  let h='<div class=sub><h3>服装库</h3><table>';
  for(const id of Object.keys(CFG.garments)){let f=CFG.garments[id];
   h+=`<tr><td>${id}</td><td>${imgOpts(f,`CFG.garments['${id}']`)}`+(f?`<img class=thumb src="/api/frame_at?file=${encodeURIComponent(f)}">`:'')+
-  `</td><td><button class=alt onclick="delete CFG.garments['${id}'];renderAll()">删</button></td></tr>`;}
+  `</td><td><button class=alt onclick="delete CFG.garments['${id}'];renderAll();showTab('p3')">删</button></td></tr>`;}
  h+=`</table><div class=row>新增 id:<input id=ngid size=6> 图:${imgOpts('','window._ng')}<button onclick=addGarment()>+ 服装</button></div></div>`;
  h+='<div class=sub><h3>按段按人换装</h3>';
  if(!persons.length)h+='<span class=hint>先在阶段2加人物</span>';
@@ -426,15 +496,13 @@ function secGarmentSched(){CFG.garments=CFG.garments||{};CFG.segments=CFG.segmen
   h+=`</div>`;});
  return h+'</div>';}
 function setSegG(i,pid,val){if(val=='(不换)')delete CFG.segments[i].garments[pid];else CFG.segments[i].garments[pid]=val;}
-function addGarment(){let id=G('ngid').value.trim();if(!id||!window._ng){msg('填 id 并选图');return;}CFG.garments[id]=window._ng;window._ng='';renderAll();}
+function addGarment(){let id=G('ngid').value.trim();if(!id||!window._ng){msg('填 id 并选图');return;}CFG.garments[id]=window._ng;window._ng='';renderAll();showTab('p3');}
 
-/* ---- 阶段4:灯光 ---- */
-function secRelight(){let r=CFG.relight=CFG.relight||{};return `<div class=sub><h3>重打光参数</h3>
+/* ---- 阶段4 / 5 ---- */
+function secRelight(){let r=CFG.relight=CFG.relight||{};return `<div class=sub><h3>重打光</h3>
  <div class=row><label>本地回退</label>${sel(['passthrough','soft_match'],r.fallback||'soft_match','CFG.relight.fallback')}</div>
  <div class=row><label>soft 强度</label>${num(r.soft_strength??0.25,'CFG.relight.soft_strength')}</div>
  <p class=hint>真实重打光建议 provider=product 或本地接 IC-Light。</p></div>`;}
-
-/* ---- 阶段5:细节/出片 ---- */
 function secComposite(){let c=CFG.compositing=CFG.compositing||{};let cb=(k,v)=>`<input type=checkbox ${v?'checked':''} onchange="CFG.compositing['${k}']=this.checked">`;
  return `<h2>5 · 细节 / 出片</h2><p class=phasehint>调真实感细节后合成出片。</p><div class=sub>
  <div class=row><label>光包裹</label>${cb('light_wrap',c.light_wrap!==false)} 强度${num(c.light_wrap_amount??0.5,'CFG.compositing.light_wrap_amount')}</div>
@@ -445,7 +513,7 @@ function secComposite(){let c=CFG.compositing=CFG.compositing||{};let cb=(k,v)=>
 function secFinal(){return `<div class=sub><h3>成片预览</h3><video controls src="/api/final?_=${Date.now()}"></video>
  <div><button class=alt onclick="renderAll()">刷新预览</button></div></div>`;}
 
-/* ---- 通用:provider / 运行 / 取点 ---- */
+/* ---- 通用 ---- */
 function secProvider(step,label){let pv=CFG.providers=CFG.providers||{};
  return `<div class=sub><div class=row><label>${label} provider</label>
   <input value="${pv[step]||'local'}" onchange="CFG.providers['${step}']=this.value" list=provlist>
@@ -454,21 +522,15 @@ function secProvider(step,label){let pv=CFG.providers=CFG.providers||{};
 function runBtn(label,steps){return `<div class=row><button class=go onclick="runSteps('${steps}')">${label}</button>
  <span class=hint>(步骤 ${steps};段见右侧)</span></div>`;}
 async function runSteps(steps){await save();
- await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},
-  body:JSON.stringify({segment:G('seg').value,steps:steps})});poll();}
+ await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:G('seg').value,steps:steps})});poll();}
 
 function pickPoint(i){openPicker(CFG.input.source,'point',(x,y)=>{CFG.persons[i].seed_point=[x,y];renderAll();showTab('p2');});}
-function pickRect(name,kind){openPicker(CFG.backgrounds[name].file,'rect',(rect)=>{
- CFG.backgrounds[name].cleanup[kind]=CFG.backgrounds[name].cleanup[kind]||[];
- CFG.backgrounds[name].cleanup[kind].push(rect);renderAll();showTab('p0');});}
 function openPicker(file,mode,cb){_picker={file,mode,cb,pts:[]};G('pkfile').value=file||'';
- G('pkhint').textContent=mode=='point'?'单击取一个点':'依次点矩形两个对角';G('picker').style.display='block';loadPickFrame();}
+ G('pkhint').textContent='单击取一个点';G('picker').style.display='block';loadPickFrame();}
 function loadPickFrame(){G('pkimg').src='/api/frame_at?file='+encodeURIComponent(G('pkfile').value)+'&t='+(G('pktime').value||0)+'&_='+Date.now();_picker.pts=[];}
 function pkClick(e){let img=e.target,r=img.getBoundingClientRect();
  let x=Math.round((e.clientX-r.left)*img.naturalWidth/r.width),y=Math.round((e.clientY-r.top)*img.naturalHeight/r.height);
- if(_picker.mode=='point'){_picker.cb(x,y);G('picker').style.display='none';return;}
- _picker.pts.push([x,y]);G('pkhint').textContent='已取 '+_picker.pts.length+'/2';
- if(_picker.pts.length==2){let[a,b]=_picker.pts;_picker.cb([Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[0],b[0]),Math.max(a[1],b[1])]);G('picker').style.display='none';}}
+ _picker.cb(x,y);G('picker').style.display='none';}
 
 async function refresh(){let j=await (await fetch('/api/status')).json();
  let h='<tr><th>步骤</th><th>provider</th><th>产物</th></tr>';

@@ -1,88 +1,97 @@
-# transition-video-generator 中枢配置 v2
-# 围绕「付费产品 / 本地」可配置编排;每步统一标准件 I/O(见 docs/ARTIFACTS.md)。
-
 project:
   fps: 30
-  resolution: [1280, 720]
-  transition: hard_cut          # hard_cut | crossfade | mask_wipe
+  resolution:
+  - 1280
+  - 720
+  transition: hard_cut
   transition_frames: 5
-
-# 每步选 本地 or 现成产品(product:* 走 handoff)。camera/composite/assemble 固定本地。
 providers:
-  matte:   local                # 抠像: local(SAM2/median) | product:runway | product:<name>
-  cleanup: local                # 去水印/路人: local(cv2.inpaint 静态mask) | product:runway
-  ground:  local                # 地面: local(as_is/virtual_plane) | product:kling(生成补地面)
-  garment: local                # 换装: local(passthrough/SD) | product:kling | product:runway
-  relight: local                # 重打光: local(IC-Light/soft_match) | product:<name>
-
+  matte: local
+  cleanup: local
+  ground: local
+  garment: local
+  relight: local
 input:
-  source: ../source/dance.mp4   # 跳舞视频(真实素材在 e:\data\workspace\source\)
-  music: data/input/music.wav   # 卡点音乐(请放入;dance 自带音轨可另配)
+  source: ../source/dance.mp4
+  music: data/input/music.wav
   backgrounds_dir: ../source
   garments_dir: ../source
-
-# 人物身份(matte 用;SAM2 用 seed_point 初始化轨迹;name 便于配置换装)
 persons:
-  - { id: p0, name: 男舞者, seed_point: [820, 360] }   # 在锁定域首帧上该人大致像素位置
-  - { id: p1, name: 女舞者, seed_point: [470, 380] }
-
-# 服装库(相对 garments_dir)
+- id: p0
+  name: 男舞者
+  seed_point:
+  - 820
+  - 360
+- id: p1
+  name: 女舞者
+  seed_point:
+  - 470
+  - 380
 garments:
-  cloth1: cloth1.jpg            # 壮族红色盛装(女,含头饰)
-  cloth2: cloth2.jpg            # 白上衣+墨绿长裙(女)
-
-# 背景库:每个视频可切多个命名子片段(秒);cleanup 给静态去元素的 mask 矩形(原分辨率 [x0,y0,x1,y1])
+  cloth1: cloth1.jpg
+  cloth2: cloth2.jpg
 backgrounds:
   meadow:
     file: bg1.mp4
     clips:
-      - { id: meadow_a, range: [10, 18] }
-      - { id: meadow_b, range: [60, 70] }
+    - id: meadow_a
+      range:
+      - 10
+      - 18
+    - id: meadow_b
+      range:
+      - 60
+      - 70
     cleanup:
-      watermarks: [[1120, 20, 1260, 70]]      # bilibili 水印
-      subtitles:  [[0, 640, 1280, 720]]       # 底部字幕条
-      movers: []                               # 走动路人→留空交给 product/video-inpaint
+      watermarks:
+      - - 1120
+        - 20
+        - 1260
+        - 70
+      subtitles:
+      - - 0
+        - 640
+        - 1280
+        - 720
+      movers: []
   night:
     file: bg2.mp4
     clips:
-      - { id: night_a, range: [2, 10] }
+    - id: night_a
+      range:
+      - 2
+      - 10
     cleanup:
-      watermarks: [[0, 10, 180, 60]]
-
+      watermarks:
+      - - 0
+        - 10
+        - 180
+        - 60
+      subtitles: []
 beats:
   detect: auto
   subdivide: 1
   override_seconds: []
   include_start_end: true
-
-# EDL:每个节拍段(段数=卡点数,按需补全)。background_clip 引用 backgrounds 里的子片段。
 segments:
-  - id: 0
-    background_clip: meadow_a
-    ground: as_is               # as_is | generate(补地面) | virtual_plane
-    garments: { p1: cloth1 }    # 按人换装;省略某人=不换
-    light: { direction: auto, color_temp: auto, intensity: auto }
-  # - id: 1
-  #   background_clip: meadow_b
-  #   ground: as_is
-  #   garments: { p1: cloth2 }
-  # - id: 2
-  #   background_clip: night_a
-  #   ground: virtual_plane
-  #   garments: { p0: cloth1, p1: cloth2 }
-
+- id: 0
+  background_clip: meadow_a
+  ground: as_is
+  garments:
+    p1: cloth1
+  light:
+    direction: auto
+    color_temp: auto
+    intensity: auto
 camera:
-  mode: auto                    # auto | locked | motion_2d | motion_3d
+  mode: auto
   overscan: 0.12
-
-segment:                        # matte 参数
-  method: sam2                  # sam2(真抠像) | median(合成测试用)
+segment:
+  method: sam2
   diff_thresh: 28
-
 relight:
-  fallback: soft_match          # passthrough | soft_match
+  fallback: soft_match
   soft_strength: 0.25
-
 compositing:
   light_wrap: true
   light_wrap_amount: 0.5
@@ -91,23 +100,20 @@ compositing:
   shadow_strength: 0.45
   shadow_blur: 9
   grain: true
-  grain_sigma: 3.0
+  grain_sigma: 3
   match_color: true
   match_strength: 0.25
   bg_blur: 0
   feather_px: 2
-
 models:
   sam2: models/sam2
   ic_light: models/ic-light
   controlnet_pose: models/controlnet-openpose
   controlnet_depth: models/controlnet-depth
-
 runtime:
   device: cuda
   low_vram: true
-  infer_scale: 1.0
-
+  infer_scale: 1
 webui:
   host: 127.0.0.1
   port: 8800
