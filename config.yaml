@@ -44,10 +44,10 @@ backgrounds:
       - 70
     cleanup:
       watermarks:
-      - - 1120
-        - 20
+      - - 1058
+        - 22
         - 1260
-        - 70
+        - 72
       subtitles:
       - - 0
         - 640

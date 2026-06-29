@@ -25,6 +25,27 @@ def ffmpeg_exe() -> str:
         raise SystemExit("找不到 ffmpeg,请安装:pip install imageio-ffmpeg") from e
 
 
+_VCODEC = None
+
+
+def gpu_codec() -> str:
+    """有 NVENC 就用 GPU 编码(h264_nvenc),否则回退 CPU(libx264)。结果缓存。"""
+    global _VCODEC
+    if _VCODEC is None:
+        try:
+            out = subprocess.run([ffmpeg_exe(), "-hide_banner", "-encoders"],
+                                 capture_output=True, text=True).stdout
+            _VCODEC = "h264_nvenc" if "h264_nvenc" in out else "libx264"
+        except Exception:
+            _VCODEC = "libx264"
+    return _VCODEC
+
+
+def _venc_args() -> list[str]:
+    return (["-c:v", "h264_nvenc", "-preset", "p4", "-cq", "20"]
+            if gpu_codec() == "h264_nvenc" else ["-c:v", "libx264", "-crf", "18"])
+
+
 # ---------- 路径安全的帧读写(兼容中文路径)----------
 
 def imread(path: str, flags: int = cv2.IMREAD_COLOR) -> np.ndarray | None:
@@ -94,7 +115,7 @@ class FrameWriter:
             ffmpeg_exe(), "-y", "-loglevel", "error",
             "-f", "rawvideo", "-pix_fmt", "bgr24",
             "-s", f"{w}x{h}", "-r", f"{fps}", "-i", "-",
-            "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p", "-crf", str(crf),
+            "-an", *_venc_args(), "-pix_fmt", "yuv420p",
             out_path,
         ]
         self.proc = subprocess.Popen(cmd, stdin=subprocess.PIPE,
@@ -144,11 +165,13 @@ def mux_audio(video_path: str, audio_path: str, out_path: str,
 def trim(src_video: str, out_path: str, start: float, end: float | None) -> None:
     """用 ffmpeg 精确裁剪 [start,end] 秒(重编码,无音轨)。"""
     ensure_dir(os.path.dirname(out_path))
-    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", str(start)]
+    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error"]
+    if gpu_codec() == "h264_nvenc":
+        cmd += ["-hwaccel", "cuda"]          # GPU 解码
+    cmd += ["-ss", str(start)]
     if end is not None:
         cmd += ["-to", str(end)]
-    cmd += ["-i", src_video, "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
-            "-crf", "18", out_path]
+    cmd += ["-i", src_video, "-an", *_venc_args(), "-pix_fmt", "yuv420p", out_path]
     subprocess.run(cmd, check=True)
 
 

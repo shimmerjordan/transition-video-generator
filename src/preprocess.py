@@ -10,8 +10,11 @@ provider:
 """
 from __future__ import annotations
 
+import math
 import os
 import shutil
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 import cv2
 import numpy as np
@@ -35,6 +38,37 @@ def _cleanup_mask(shape, cleanup: dict):
     for x0, y0, x1, y1 in rects:
         cv2.rectangle(mask, (int(x0), int(y0)), (int(x1), int(y1)), 255, -1)
     return cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+
+
+def _rects_of(cleanup: dict) -> list:
+    return [list(map(int, r)) for r in
+            (cleanup.get("watermarks", []) or []) + (cleanup.get("subtitles", []) or [])]
+
+
+def _inpaint_chunk(src: str, out: str, start: int, count: int,
+                   rects: list, fps: float, size: tuple) -> str:
+    """子进程:处理 [start,start+count) 帧,只在矩形包围盒内 inpaint,编码为 chunk。"""
+    w, h = size
+    mask = np.zeros((h, w), np.uint8)
+    for x0, y0, x1, y1 in rects:
+        cv2.rectangle(mask, (x0, y0), (x1, y1), 255, -1)
+    mask = cv2.dilate(mask, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)))
+    ys, xs = np.where(mask > 0)
+    pad = 12
+    bx0, bx1 = max(0, xs.min() - pad), min(w, xs.max() + pad + 1)
+    by0, by1 = max(0, ys.min() - pad), min(h, ys.max() + pad + 1)
+    sub = mask[by0:by1, bx0:bx1]
+    cap = cv2.VideoCapture(src)
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start)
+    with video.FrameWriter(out, fps, (w, h)) as wr:
+        for _ in range(count):
+            ok, fr = cap.read()
+            if not ok:
+                break
+            fr[by0:by1, bx0:bx1] = cv2.inpaint(fr[by0:by1, bx0:bx1], sub, 3, cv2.INPAINT_TELEA)
+            wr.write(fr)
+    cap.release()
+    return out
 
 
 def dewatermark_bg(cfg: dict, name: str, root: str, log=print) -> str:
@@ -63,14 +97,56 @@ def dewatermark_bg(cfg: dict, name: str, root: str, log=print) -> str:
         shutil.copyfile(src, out)
         return out
 
-    n = 0
+    # 多进程分块并行(每块 GPU 编码),充分利用多核 + NVENC
+    total = info["count"] or 0
+    rects = _rects_of(cleanup)
+    workers = min(os.cpu_count() or 4, 4)   # cv2 释放 GIL,多线程并行;限 4 路 NVENC 会话
+    if total <= 0 or workers <= 1:
+        return _dewatermark_serial(src, out, mask, fps, (w, h), log, name)
+
+    chunk = math.ceil(total / workers)
+    work_dir = os.path.join(contract.work_root(root), "_chunks", name)
+    video.ensure_dir(work_dir)
+    jobs, parts = [], []
+    for i in range(workers):
+        start = i * chunk
+        if start >= total:
+            break
+        part = os.path.join(work_dir, f"part_{i:03d}.mp4")
+        parts.append(part)
+        jobs.append((src, part, start, chunk, rects, float(fps), (w, h)))
+    log(f"[去水印] {name}: {video.gpu_codec()} × {len(jobs)} 线程并行,共 {total} 帧…")
+    with ThreadPoolExecutor(max_workers=workers) as ex:
+        list(ex.map(_dewatermark_chunk_star, jobs))
+
+    # 拼接各块
+    lst = os.path.join(work_dir, "concat.txt")
+    with open(lst, "w", encoding="utf-8") as f:
+        for p in parts:
+            f.write(f"file '{p.replace(os.sep, '/')}'\n")
+    subprocess.run([video.ffmpeg_exe(), "-y", "-loglevel", "error", "-f", "concat",
+                    "-safe", "0", "-i", lst, "-c", "copy", out], check=True)
+    shutil.rmtree(work_dir, ignore_errors=True)
+    log(f"[去水印] {name}: 完成 {total} 帧 → {out}")
+    return out
+
+
+def _dewatermark_chunk_star(args):
+    return _inpaint_chunk(*args)
+
+
+def _dewatermark_serial(src, out, mask, fps, size, log, name) -> str:
+    w, h = size
+    ys, xs = np.where(mask > 0)
+    pad = 12
+    x0, x1 = max(0, xs.min() - pad), min(w, xs.max() + pad + 1)
+    y0, y1 = max(0, ys.min() - pad), min(h, ys.max() + pad + 1)
+    sub = mask[y0:y1, x0:x1]
     with video.FrameWriter(out, fps, (w, h)) as wr:
         for fr in video.read_frames(src):
-            wr.write(cv2.inpaint(fr, mask, 3, cv2.INPAINT_TELEA))
-            n += 1
-            if n % 300 == 0:
-                log(f"[去水印] {name}: {n} 帧…")
-    log(f"[去水印] {name}: 完成 {n} 帧 → {out}")
+            fr[y0:y1, x0:x1] = cv2.inpaint(fr[y0:y1, x0:x1], sub, 3, cv2.INPAINT_TELEA)
+            wr.write(fr)
+    log(f"[去水印] {name}: 完成(单进程) → {out}")
     return out
 
 

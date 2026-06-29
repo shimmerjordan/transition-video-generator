@@ -31,7 +31,26 @@ ROOT = project_root()
 CONFIG_PATH = os.path.join(ROOT, "config.yaml")
 IMG_EXT = (".jpg", ".jpeg", ".png", ".webp", ".bmp")
 VID_EXT = (".mp4", ".mov", ".avi", ".mkv", ".webm")
-app = FastAPI(title="转场视频生成器 · 配置前端")
+from contextlib import asynccontextmanager  # noqa: E402
+
+
+@asynccontextmanager
+async def _lifespan(app):
+    """启动时抑制 Windows ProactorEventLoop 在客户端断开时的 ConnectionResetError 噪音。"""
+    import asyncio
+    loop = asyncio.get_running_loop()
+
+    def handler(loop, context):
+        exc = context.get("exception")
+        if isinstance(exc, (ConnectionResetError, ConnectionAbortedError)):
+            return
+        loop.default_exception_handler(context)
+
+    loop.set_exception_handler(handler)
+    yield
+
+
+app = FastAPI(title="转场视频生成器 · 配置前端", lifespan=_lifespan)
 RUN = {"running": False, "log": []}
 
 
@@ -279,47 +298,65 @@ def index():
 PAGE = r"""<!doctype html><html lang=zh><meta charset=utf-8>
 <title>转场视频生成器 · 配置</title>
 <style>
-body{font-family:system-ui,'Microsoft YaHei',sans-serif;margin:0;background:#0f1115;color:#e6e6e6}
-header{padding:10px 18px;background:#171a21;border-bottom:1px solid #2a2f3a;display:flex;align-items:center;gap:12px}
-header b{font-size:16px}
-nav{display:flex;gap:4px;padding:8px 14px;background:#13161c;border-bottom:1px solid #2a2f3a;flex-wrap:wrap}
-nav button{background:#222733;color:#ccd;border:1px solid #2a2f3a;border-radius:6px;padding:6px 12px;cursor:pointer}
-nav button.on{background:#2d6cdf;color:#fff}
-.layout{display:flex;align-items:flex-start}main{padding:16px;flex:1;min-width:0}
-aside{width:340px;border-left:1px solid #2a2f3a;padding:12px;background:#13161c;min-height:90vh;position:sticky;top:0}
-#outs div{font-size:12px;padding:1px 0}#outs .ok{color:#4ad07a}#outs .no{color:#667}
-aside video{max-height:120px}
-.tab{display:none}.tab.on{display:block}
-h2{margin:4px 0 12px;font-size:18px}h3{margin:14px 0 6px}
-.row{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
-.row label{min-width:90px;color:#9aa}
-.sub{border:1px solid #2a2f3a;border-radius:8px;padding:10px;margin:10px 0;background:#13161c}
-.phasehint{color:#8a93a6;font-size:13px;margin-bottom:8px}
-button{background:#2d6cdf;color:#fff;border:0;border-radius:6px;padding:6px 11px;cursor:pointer;margin:2px}
-button.alt{background:#3a4150}button.go{background:#2a9d5b;font-size:15px;padding:8px 16px}
-input,select{background:#0b0d12;color:#cfe;border:1px solid #2a2f3a;border-radius:5px;padding:5px}
-table{border-collapse:collapse;margin:6px 0}td,th{border-bottom:1px solid #2a2f3a;padding:4px 8px;text-align:left}
-.thumb{height:42px;border-radius:4px;margin-left:6px;vertical-align:middle}
-.tag{padding:1px 7px;border-radius:10px;font-size:11px}.local{background:#244a2a}.product{background:#5a3a1a}
-#log{height:220px;overflow:auto;background:#0b0d12;border:1px solid #2a2f3a;border-radius:6px;padding:8px;
-font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap}
-textarea{width:100%;height:430px;background:#0b0d12;color:#cfe;border:1px solid #2a2f3a;border-radius:6px;
-font-family:Consolas,monospace;font-size:12px;padding:8px}
-.hint{color:#8a93a6;font-size:12px}video{max-width:100%;border-radius:6px}
+:root{--bg:#0c0e13;--panel:#161a22;--panel2:#1c212b;--line:#262d3a;--txt:#e8ebf0;--mut:#8b93a6;
+ --accent:#3b82f6;--accent2:#2563eb;--go:#22c55e;--go2:#16a34a;--rad:10px}
+*{box-sizing:border-box}
+body{font-family:'Segoe UI',system-ui,'Microsoft YaHei',sans-serif;margin:0;background:var(--bg);color:var(--txt);font-size:14px}
+header{padding:12px 20px;background:linear-gradient(90deg,#1a1f2b,#13161d);border-bottom:1px solid var(--line);
+ display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:8}
+header b{font-size:17px;letter-spacing:.3px}
+nav{display:flex;gap:6px;padding:10px 16px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap;
+ position:sticky;top:49px;z-index:7}
+nav button{background:transparent;color:var(--mut);border:1px solid transparent;border-radius:20px;padding:7px 14px;cursor:pointer;
+ font-size:13px;transition:.15s}
+nav button:hover{color:var(--txt);background:var(--panel2)}
+nav button.on{background:var(--accent);color:#fff;box-shadow:0 2px 10px rgba(59,130,246,.4)}
+.layout{display:flex;align-items:flex-start}main{padding:20px 24px;flex:1;min-width:0}
+aside{width:330px;border-left:1px solid var(--line);padding:16px;background:var(--panel);min-height:92vh;position:sticky;top:97px}
+#outs div{font-size:12px;padding:2px 0}#outs .ok{color:#34d399}#outs .no{color:#5a6273}
+aside video{max-height:120px;width:100%}
+.tab{display:none;animation:fade .2s ease}.tab.on{display:block}
+@keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
+h2{margin:2px 0 6px;font-size:20px;font-weight:600}h3{margin:14px 0 8px;font-size:14px;color:#c7cdd9}
+.row{display:flex;align-items:center;gap:8px;margin:8px 0;flex-wrap:wrap}
+.row label{min-width:92px;color:var(--mut)}
+.sub{border:1px solid var(--line);border-radius:var(--rad);padding:14px 16px;margin:12px 0;background:var(--panel2);
+ box-shadow:0 1px 3px rgba(0,0,0,.25)}
+.phasehint{color:var(--mut);font-size:13px;margin-bottom:10px;line-height:1.6}
+button{background:var(--accent);color:#fff;border:0;border-radius:7px;padding:7px 13px;cursor:pointer;margin:2px;
+ font-size:13px;transition:.15s}
+button:hover{background:var(--accent2)}
+button.alt{background:#2c3340}button.alt:hover{background:#39424f}
+button.go{background:var(--go);font-size:14px;padding:9px 18px;font-weight:600}button.go:hover{background:var(--go2)}
+input,select{background:#0d1016;color:var(--txt);border:1px solid var(--line);border-radius:6px;padding:6px 8px;
+ font-size:13px;transition:.15s}
+input:focus,select:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 2px rgba(59,130,246,.25)}
+table{border-collapse:collapse;margin:6px 0;width:100%}
+td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left}th{color:var(--mut);font-weight:500}
+.thumb{height:44px;border-radius:5px;margin-left:6px;vertical-align:middle;border:1px solid var(--line)}
+.tag{padding:2px 9px;border-radius:11px;font-size:11px;font-weight:600}.local{background:#14532d;color:#86efac}.product{background:#5b3410;color:#fdba74}
+#log{height:220px;overflow:auto;background:#0d1016;border:1px solid var(--line);border-radius:8px;padding:10px;
+ font-family:Consolas,monospace;font-size:12px;white-space:pre-wrap;line-height:1.5}
+textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px solid var(--line);border-radius:8px;
+ font-family:Consolas,monospace;font-size:12px;padding:10px}
+.hint{color:var(--mut);font-size:12px}video{max-width:100%;border-radius:8px;border:1px solid var(--line)}
 /* 时间轨道 */
-.track{position:relative;height:48px;background:#0b0d12;border:1px solid #2a2f3a;border-radius:6px;margin:8px 0 4px;overflow:hidden;user-select:none}
-.tick{position:absolute;top:0;font-size:10px;color:#566;border-left:1px solid #1d2530;padding-left:2px;height:100%;pointer-events:none}
-.blk{position:absolute;top:9px;height:30px;background:rgba(45,108,223,.55);border:1px solid #2d6cdf;border-radius:4px;cursor:grab;display:flex;align-items:center;justify-content:center;min-width:14px}
-.blk .lbl{font-size:11px;color:#fff;pointer-events:none;white-space:nowrap}
-.hl,.hr{position:absolute;top:0;width:9px;height:100%;cursor:ew-resize;background:#5b8def}
-.hl{left:0;border-radius:4px 0 0 4px}.hr{right:0;border-radius:0 4px 4px 0}
-.blk .del{position:absolute;top:-8px;right:-6px;background:#a33;border:0;color:#fff;border-radius:9px;padding:0 5px;cursor:pointer;font-size:11px}
-.prev{width:100%;max-height:340px;object-fit:contain;border:1px solid #2a2f3a;border-radius:6px;background:#000;display:block}
-.playhead{position:absolute;top:0;width:0;border-left:2px solid #ffd400;height:100%;z-index:5;pointer-events:none}
-#wmcanvas{border:1px solid #2a2f3a;border-radius:6px;cursor:crosshair;max-width:100%;touch-action:none}
-#picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9}
-#pkbox{background:#171a21;border:1px solid #2a2f3a;border-radius:8px;padding:14px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
-#pkimg{max-width:100%;cursor:crosshair;border:1px solid #2a2f3a}
+.track{position:relative;height:54px;background:linear-gradient(#0d1016,#0a0c11);border:1px solid var(--line);border-radius:8px;
+ margin:10px 0 6px;overflow:hidden;user-select:none}
+.tick{position:absolute;top:0;font-size:10px;color:#4b5566;border-left:1px solid #1a2230;padding-left:3px;height:100%;pointer-events:none}
+.blk{position:absolute;top:10px;height:34px;background:linear-gradient(rgba(59,130,246,.6),rgba(59,130,246,.4));
+ border:1px solid var(--accent);border-radius:6px;cursor:grab;display:flex;align-items:center;justify-content:center;min-width:16px;
+ box-shadow:0 2px 8px rgba(0,0,0,.3)}
+.blk .lbl{font-size:11px;color:#fff;pointer-events:none;white-space:nowrap;text-shadow:0 1px 2px rgba(0,0,0,.6)}
+.hl,.hr{position:absolute;top:0;width:10px;height:100%;cursor:ew-resize;background:var(--accent)}
+.hl{left:0;border-radius:6px 0 0 6px}.hr{right:0;border-radius:0 6px 6px 0}
+.blk .del{position:absolute;top:-9px;right:-7px;background:#dc2626;border:0;color:#fff;border-radius:10px;padding:0 6px;cursor:pointer;font-size:12px}
+.prev{width:100%;max-height:360px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#000;display:block}
+.playhead{position:absolute;top:0;width:0;border-left:2px solid #fbbf24;height:100%;z-index:5;pointer-events:none;box-shadow:0 0 6px rgba(251,191,36,.6)}
+#wmcanvas{border:1px solid var(--line);border-radius:8px;cursor:crosshair;max-width:100%;touch-action:none}
+#picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9;backdrop-filter:blur(2px)}
+#pkbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
+#pkimg{max-width:100%;cursor:crosshair;border:1px solid var(--line);border-radius:8px}
 </style>
 <header><b>🎬 转场视频生成器</b><button onclick=save()>💾 保存全部</button><span id=msg class=hint></span></header>
 <nav id=nav></nav>
@@ -620,7 +657,8 @@ async function refresh(){let j=await (await fetch('/api/status')).json();
  if(G('outs'))G('outs').innerHTML=o;}
 async function poll(){let j=await (await fetch('/api/run/log')).json();let l=G('log');
  l.textContent=j.log.join('\n');l.scrollTop=l.scrollHeight;
- G('runflag').textContent=j.running?'(运行中…)':'(空闲)';if(j.running)setTimeout(poll,1000);else refresh();}
+ G('runflag').textContent=j.running?'(运行中…)':'(空闲)';
+ if(j.running)setTimeout(poll,1000);else{refresh();renderAll();}}
 async function loadRaw(){G('rawcfg').value=await (await fetch('/api/config')).text();}
 async function saveRaw(){let r=await fetch('/api/config',{method:'POST',body:G('rawcfg').value});
  let j=await r.json();if(j.ok){msg('✓ YAML 已保存');boot();}else msg('✗ '+j.error);}
