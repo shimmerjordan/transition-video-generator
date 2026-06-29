@@ -8,6 +8,7 @@ project:
   enable_garment_swap: true   # 是否换装(可关)
   enable_relight: true        # 是否重打光(可关)
   transition: hard_cut        # 转场方式:hard_cut | crossfade | mask_wipe
+  transition_frames: 5        # crossfade/mask_wipe 的过渡帧数(hard_cut 忽略)
 
 input:
   source: data/input/source.mp4
@@ -47,11 +48,28 @@ segments:
   #   background: backgrounds/clip_02.mp4
   #   ...
 
+# S3 抠像
+segment:
+  method: median              # median=时序中值背景差分(离线可用) | sam2=SAM2(需权重)
+  diff_thresh: 28             # median 法的前景差分阈值(越小越敏感)
+
+# S6 重打光回退(IC-Light 不可用时)
+relight:
+  fallback: soft_match        # passthrough=原样 | soft_match=轻量向背景环境色偏移
+  soft_strength: 0.25
+
 compositing:
   light_wrap: true
+  light_wrap_amount: 0.5      # 背景光包裹强度
+  light_wrap_width: 4         # 包裹内缘带宽(像素)
   contact_shadow: true
+  shadow_strength: 0.45       # 接触阴影浓度
+  shadow_blur: 9              # 阴影羽化
   grain: true
-  match_color: true           # 人物层向背景层统一调色
+  grain_sigma: 3.0            # 颗粒强度
+  match_color: true           # 主体层向背景层统一调色
+  match_strength: 0.25
+  bg_blur: 0                  # 背景虚化(景深);0=关,>0 为模糊核档位
   feather_px: 2               # 抠像边缘羽化
 
 models:

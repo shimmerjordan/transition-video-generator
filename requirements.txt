@@ -1,15 +1,13 @@
 # 分阶段依赖:按管线步骤逐步启用,避免一次性装齐重型包。
 
-# --- 基础 / S1 卡点(现已实现)---
+# --- 基础 / S1–S8 纯 CV 管线(现已实现,可离线端到端运行)---
 pyyaml
 numpy
-librosa
-soundfile
-matplotlib            # 仅 --plot 可视化时需要,可选
-
-# --- S2 运镜跟踪 / S4 背景稳定化(后续)---
-opencv-python
-# imageio-ffmpeg      # 备用的帧 I/O / 编码
+librosa               # S1 卡点
+soundfile             # 音频读写
+opencv-python         # S2 运镜跟踪 / S3 抠像 / S4 稳定化 / S7 合成
+imageio-ffmpeg        # 自带 ffmpeg 二进制:编码 + 音频混流(无需系统 ffmpeg)
+matplotlib            # 仅 S1 --plot 可视化时需要,可选
 
 # --- S3 抠像(后续)---
 # torch               # 装与本机 CUDA 匹配的版本(见 PLAN「环境搭建」)
