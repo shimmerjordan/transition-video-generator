@@ -14,7 +14,7 @@ import math
 import os
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import cv2
 import numpy as np
@@ -87,7 +87,7 @@ def _inpaint_chunk(src: str, out: str, start: int, count: int,
     return out
 
 
-def dewatermark_bg(cfg: dict, name: str, root: str, log=print) -> str:
+def dewatermark_bg(cfg: dict, name: str, root: str, log=print, progress=None) -> str:
     """对某背景去水印(支持按时间分段),产出 data/work/clean/<name>.mp4。无矩形则直接转存。"""
     bg = (get(cfg, "backgrounds", {}) or {}).get(name)
     if not bg:
@@ -105,6 +105,9 @@ def dewatermark_bg(cfg: dict, name: str, root: str, log=print) -> str:
         log(f"[去水印] {name}: 无去除区域,直接转存")
         shutil.copyfile(src, out)
         return out
+
+    if get(cfg, "dewatermark.engine", "cv2") == "sd":
+        return _sd_inpaint_pass(cfg, name, src, out, cleanup, root, log, progress)
 
     info = video.video_info(src)
     fps = info["fps"] or get(cfg, "project.fps", 30)
@@ -127,7 +130,13 @@ def dewatermark_bg(cfg: dict, name: str, root: str, log=print) -> str:
     log(f"[去水印] {name}: {video.gpu_codec()} × {len(jobs)} 线程,共 {total} 帧"
         f"(全段矩形+{nreg} 个分段区间)…")
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        list(ex.map(lambda a: _inpaint_chunk(*a), jobs))
+        futs = [ex.submit(_inpaint_chunk, *a) for a in jobs]
+        done = 0
+        for f in as_completed(futs):
+            f.result()
+            done += 1
+            if progress:
+                progress(done / len(futs))
 
     lst = os.path.join(work_dir, "concat.txt")
     with open(lst, "w", encoding="utf-8") as f:
@@ -163,10 +172,78 @@ def make_clips(cfg: dict, name: str, root: str, log=print) -> list[str]:
     return outs
 
 
-def run_dewatermark(cfg: dict, root: str, name: str | None, log=print) -> None:
+_SD_PIPE = None
+
+
+def _sd_pipe(cfg: dict):
+    """构建/缓存 SD inpaint 管线(GPU,fp16)。"""
+    global _SD_PIPE
+    if _SD_PIPE is None:
+        import torch
+        from diffusers import AutoPipelineForInpainting
+        model = get(cfg, "dewatermark.model", "Lykon/dreamshaper-8-inpainting")
+        os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
+        pipe = AutoPipelineForInpainting.from_pretrained(model, torch_dtype=torch.float16)
+        pipe = pipe.to("cuda")
+        pipe.set_progress_bar_config(disable=True)
+        try:
+            pipe.enable_attention_slicing()
+        except Exception:
+            pass
+        _SD_PIPE = pipe
+    return _SD_PIPE
+
+
+def _sd_inpaint_pass(cfg, name, src, out, cleanup, root, log, progress) -> str:
+    """逐帧 SD 扩散修复(GPU):每个生效矩形单独裁剪→修复→贴回。质量好、慢、吃 GPU。"""
+    import torch  # noqa
+    from PIL import Image
+    pipe = _sd_pipe(cfg)
+    S = int(get(cfg, "dewatermark.size", 512))
+    steps = int(get(cfg, "dewatermark.steps", 25))
+    gs = float(get(cfg, "dewatermark.guidance", 8))
+    prompt = get(cfg, "dewatermark.prompt", "clean background, seamless, photorealistic")
+    neg = get(cfg, "dewatermark.negative", "text, watermark, logo, letters, characters, words")
+
+    info = video.video_info(src)
+    fps, w, h = info["fps"] or get(cfg, "project.fps", 30), info["width"], info["height"]
+    total = info["count"] or 0
+    log(f"[去水印·SD] {name}: {get(cfg,'dewatermark.model','dreamshaper-8-inpainting')} GPU,共 {total} 帧(慢)…")
+
+    n = 0
+    with video.FrameWriter(out, fps, (w, h)) as wr:
+        for fr in video.read_frames(src):
+            t = n / fps
+            for x0, y0, x1, y1 in active_rects(cleanup, t):
+                cx, cy = (x0 + x1) // 2, (y0 + y1) // 2
+                half = max(x1 - x0, y1 - y0) // 2 + 60
+                bx0, by0 = max(0, cx - half), max(0, cy - half)
+                bx1, by1 = min(w, cx + half), min(h, cy + half)
+                crop = fr[by0:by1, bx0:bx1].copy()
+                m = np.zeros(crop.shape[:2], np.uint8)
+                cv2.rectangle(m, (x0 - bx0, y0 - by0), (x1 - bx0, y1 - by0), 255, -1)
+                ci = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).resize((S, S))
+                mi = Image.fromarray(m).resize((S, S))
+                res = pipe(prompt=prompt, negative_prompt=neg, image=ci, mask_image=mi,
+                           num_inference_steps=steps, guidance_scale=gs).images[0]
+                res = cv2.cvtColor(np.array(res.resize((bx1 - bx0, by1 - by0))), cv2.COLOR_RGB2BGR)
+                mm = (cv2.resize(m, (bx1 - bx0, by1 - by0)) > 127)[..., None]
+                fr[by0:by1, bx0:bx1] = np.where(mm, res, crop)
+            wr.write(fr)
+            n += 1
+            if progress and total:
+                progress(n / total)
+            if n % 50 == 0:
+                log(f"[去水印·SD] {name}: {n}/{total} 帧…")
+    log(f"[去水印·SD] {name}: 完成 {n} 帧 → {out}")
+    return out
+
+
+def run_dewatermark(cfg: dict, root: str, name: str | None, log=print, progress=None) -> None:
     names = [name] if name else list((get(cfg, "backgrounds", {}) or {}).keys())
-    for nm in names:
-        dewatermark_bg(cfg, nm, root, log)
+    for i, nm in enumerate(names):
+        dewatermark_bg(cfg, nm, root, log,
+                       progress=(lambda f, i=i: progress((i + f) / len(names))) if progress else None)
 
 
 def run_clips(cfg: dict, root: str, name: str | None, log=print) -> None:

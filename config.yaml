@@ -54,6 +54,7 @@ backgrounds:
         - 1280
         - 720
       movers: []
+      regions: []
   night:
     file: bg2.mp4
     clips:
@@ -89,6 +90,15 @@ camera:
 segment:
   method: sam2
   diff_thresh: 28
+# 去水印引擎:cv2(快,本地CPU)| sd(GPU 扩散修复,质量好、慢、吃显存)
+dewatermark:
+  engine: cv2
+  model: Lykon/dreamshaper-8-inpainting
+  size: 512
+  steps: 25
+  guidance: 8
+  prompt: clean background, seamless, photorealistic
+  negative: text, watermark, logo, letters, characters, words
 relight:
   fallback: soft_match
   soft_strength: 0.25
@@ -106,7 +116,7 @@ compositing:
   bg_blur: 0
   feather_px: 2
 models:
-  sam2: models/sam2/sam2.1_hiera_base_plus.pt   # 质量更好;small=更快
+  sam2: models/sam2/sam2.1_hiera_base_plus.pt
   sam2_cfg: configs/sam2.1/sam2.1_hiera_b+.yaml
   ic_light: models/ic-light
   controlnet_pose: models/controlnet-openpose

@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import threading
+import time
 import traceback
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -51,7 +52,28 @@ async def _lifespan(app):
 
 
 app = FastAPI(title="转场视频生成器 · 配置前端", lifespan=_lifespan)
-RUN = {"running": False, "log": []}
+RUN = {"running": False, "log": [], "progress": None, "t0": 0.0, "task": ""}
+
+
+def _set_progress(f: float) -> None:
+    RUN["progress"] = max(0.0, min(1.0, float(f)))
+
+
+def _gpu_stats():
+    try:
+        import pynvml
+        if not getattr(_gpu_stats, "_init", False):
+            pynvml.nvmlInit()
+            _gpu_stats._init = True
+        h = pynvml.nvmlDeviceGetHandleByIndex(0)
+        u = pynvml.nvmlDeviceGetUtilizationRates(h)
+        m = pynvml.nvmlDeviceGetMemoryInfo(h)
+        name = pynvml.nvmlDeviceGetName(h)
+        return {"name": name if isinstance(name, str) else name.decode(),
+                "util": u.gpu, "mem_used": m.used // 1024 // 1024,
+                "mem_total": m.total // 1024 // 1024}
+    except Exception:
+        return None
 
 
 def _clean(cfg: dict) -> dict:
@@ -196,16 +218,20 @@ def status():
     art = contract.artifact_status(ROOT, _segment_ids(cfg))
     out_map = {"beats": "beats", "camera": "locked", "matte": "alpha", "plates": "plates",
                "garment": "garment", "relight": "relit", "composite": "comp", "assemble": "final"}
+    label = {"beats": "卡点", "camera": "运镜对齐", "matte": "抠像", "plates": "背景平面",
+             "garment": "换装", "relight": "打光", "composite": "合成", "assemble": "出片"}
     rows = []
     for i, step in enumerate(pipeline.STEP_ORDER, 1):
         prov = get(cfg, f"providers.{step}", "local") if step in (
             "matte", "ground", "garment", "relight") else "local"
         a = out_map[step]
         if a in ("beats", "final"):
-            st = "✓" if art.get(a) else "—"
+            st = "✓ 已生成" if art.get(a) else "— 未生成"
         else:
-            st = " ".join(f"s{k}:{v}" for k, v in (art.get(a, {}) or {}).items()) or "—"
-        rows.append({"idx": i, "step": step, "provider": prov, "status": st})
+            counts = art.get(a, {}) or {}
+            ndone = sum(1 for v in counts.values() if v)
+            st = f"{ndone}/{len(counts)} 段" if counts else "—"
+        rows.append({"idx": i, "step": step, "label": label[step], "provider": prov, "status": st})
     bgs = get(cfg, "backgrounds", {}) or {}
     clean = {n: os.path.isfile(contract.clean_path(ROOT, n)) for n in bgs}
     clips = {}
@@ -227,13 +253,14 @@ async def run_pipeline(req: Request):
     steps = pipeline.parse_steps(stp or None)
 
     def worker():
-        RUN.update(running=True, log=[])
+        RUN.update(running=True, log=[], progress=None, t0=time.time(), task=f"pipeline {sorted(steps)}")
         try:
             pipeline.run(CONFIG_PATH, segment, steps, log=lambda m: RUN["log"].append(str(m)))
         except Exception:
             RUN["log"].append("ERROR:\n" + traceback.format_exc())
         finally:
             RUN["running"] = False
+            RUN["progress"] = None
 
     threading.Thread(target=worker, daemon=True).start()
     return {"ok": True}
@@ -249,12 +276,12 @@ async def run_tool(req: Request):
     cfg = load_config(CONFIG_PATH)
 
     def worker():
-        RUN.update(running=True, log=[])
+        RUN.update(running=True, log=[], progress=0.0, t0=time.time(), task=f"{tool} {name or '全部'}")
         lg = lambda m: RUN["log"].append(str(m))
         try:
             from src import preprocess
             if tool == "dewatermark":
-                preprocess.run_dewatermark(cfg, ROOT, name, log=lg)
+                preprocess.run_dewatermark(cfg, ROOT, name, log=lg, progress=_set_progress)
             elif tool == "clips":
                 preprocess.run_clips(cfg, ROOT, name, log=lg)
             else:
@@ -263,6 +290,7 @@ async def run_tool(req: Request):
             lg("ERROR:\n" + traceback.format_exc())
         finally:
             RUN["running"] = False
+            RUN["progress"] = None
 
     threading.Thread(target=worker, daemon=True).start()
     return {"ok": True}
@@ -271,6 +299,22 @@ async def run_tool(req: Request):
 @app.get("/api/run/log")
 def run_log():
     return {"running": RUN["running"], "log": RUN["log"][-500:]}
+
+
+@app.get("/api/resources")
+def resources():
+    try:
+        import psutil
+        cpu = psutil.cpu_percent(interval=None)
+        ram = psutil.virtual_memory().percent
+    except Exception:
+        cpu = ram = None
+    return {
+        "cpu": cpu, "ram": ram, "gpu": _gpu_stats(),
+        "running": RUN["running"], "task": RUN.get("task", ""),
+        "progress": RUN.get("progress"),
+        "elapsed": round(time.time() - RUN["t0"], 1) if RUN["t0"] else 0,
+    }
 
 
 @app.get("/api/video")
@@ -314,6 +358,11 @@ nav button.on{background:var(--accent);color:#fff;border-color:var(--accent);box
 .layout{display:flex;align-items:flex-start}main{padding:20px 24px;flex:1;min-width:0}
 aside{width:330px;border-left:1px solid var(--line);padding:16px;background:var(--panel);min-height:92vh;position:sticky;top:97px}
 #outs div{font-size:12px;padding:2px 0}#outs .ok{color:#34d399}#outs .no{color:#5a6273}
+.resrow{display:flex;align-items:center;gap:6px;margin:4px 0;font-size:12px}
+.resrow>span:first-child{width:36px;color:var(--mut)}
+.barbg{flex:1;height:9px;background:#0d1016;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.bar{height:100%;background:linear-gradient(90deg,#3b82f6,#60a5fa);transition:width .4s}
+.rv{width:92px;text-align:right;color:#cdd;font-variant-numeric:tabular-nums}
 aside video{max-height:120px;width:100%}
 .tab{display:none;animation:fade .2s ease}.tab.on{display:block}
 @keyframes fade{from{opacity:0;transform:translateY(4px)}to{opacity:1}}
@@ -353,14 +402,12 @@ textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px 
 .blk .del{position:absolute;top:-9px;right:-7px;background:#dc2626;border:0;color:#fff;border-radius:10px;padding:0 6px;cursor:pointer;font-size:12px}
 .prev{width:100%;max-height:360px;object-fit:contain;border:1px solid var(--line);border-radius:8px;background:#000;display:block}
 .playhead{position:absolute;top:0;width:0;border-left:2px solid #fbbf24;height:100%;z-index:5;pointer-events:none;box-shadow:0 0 6px rgba(251,191,36,.6)}
-.media{width:100%;max-width:620px;aspect-ratio:16/9;object-fit:contain;background:#000;border:1px solid var(--line);border-radius:8px;display:block}
-#wmcanvas.media{cursor:crosshair;touch-action:none}
-.mediarow{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0}
-.mediarow>div{flex:1;min-width:300px}
+.media{width:100%;height:auto;aspect-ratio:16/9;object-fit:contain;background:#000;border:1px solid var(--line);border-radius:8px;display:block;cursor:crosshair;touch-action:none}
+.mediarow{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:10px 0}
+.mediarow>div{min-width:0}
 .medialbl{color:var(--mut);font-size:12px;margin-bottom:4px}
 .opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin-bottom:10px}
 .optrow{display:flex;align-items:center;gap:8px}.optrow b{min-width:72px;color:var(--mut);font-weight:500}
-#wmcanvas{border:1px solid var(--line);border-radius:8px;cursor:crosshair;max-width:100%;touch-action:none}
 #picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9;backdrop-filter:blur(2px)}
 #pkbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
 #pkimg{max-width:100%;cursor:crosshair;border:1px solid var(--line);border-radius:8px}
@@ -383,7 +430,8 @@ textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px 
  </div>
 </main>
 <aside>
- <h3>运行 / 状态</h3><div class=row>段(留空=全部):<input id=seg size=4 placeholder=all></div>
+ <h3>资源占用 <span class=hint id=resflag></span></h3><div id=res></div>
+ <h3>步骤进度</h3><div class=row>段(留空=全部):<input id=seg size=4 placeholder=all></div>
  <table id=steps></table>
  <div id=outs></div>
  <h3>日志 <span id=runflag class=hint></span></h3><div id=log></div>
@@ -422,7 +470,8 @@ function durOf(name){let f=(CFG.backgrounds[name]||{}).file;let v=ASSETS.videos.
 async function boot(){buildNav();
  CFG=await (await fetch('/api/config.json')).json();
  ASSETS=await (await fetch('/api/assets')).json();
- renderAll();showTab('wm');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);refresh();}
+ renderAll();showTab('wm');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);
+ refresh();pollRes();setInterval(pollRes,1500);}
 function renderAll(){
  G('t_clip').innerHTML=secInputs()+secClips();
  G('t_wm').innerHTML=secWatermark();
@@ -530,6 +579,9 @@ function secWatermark(){let names=Object.keys(CFG.backgrounds||{});
    <div class=optrow><b>作用范围</b><select onchange="wmSetScope(this.value)">${scopeOpts}</select>
      <button class=alt onclick="wmAddRegion()">+ 区间</button></div>
    <div class=optrow><b>去水印工具</b><input value="${(CFG.providers||{}).cleanup||'local'}" onchange="CFG.providers.cleanup=this.value" list=provlist size=12></div>
+   <div class=optrow><b>修复引擎</b>${(()=>{let d=CFG.dewatermark=CFG.dewatermark||{};return sel(['cv2','sd'],d.engine||'cv2','CFG.dewatermark.engine')})()}
+     <span class=hint>cv2=快 / sd=GPU扩散(质量好慢)</span></div>
+   <div class=optrow><b>SD步数</b><input type=number value="${(CFG.dewatermark||{}).steps||25}" onchange="CFG.dewatermark.steps=+this.value" size=4 style=width:60px></div>
   </div>
   ${rangeEdit}
   <div class=row>时间 <input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.2 value=${WMV.t} oninput="WMV.t=+this.value;wmLoad()" style=flex:1> <span id=wmtl>${WMV.t}</span>s</div>
@@ -684,9 +736,11 @@ function pkClick(e){let img=e.target,r=img.getBoundingClientRect();
  _picker.cb(x,y);G('picker').style.display='none';}
 
 async function refresh(){let j=await (await fetch('/api/status')).json();
- let h='<tr><th>步骤</th><th>provider</th><th>产物</th></tr>';
- for(const s of j.steps){let cls=s.provider.startsWith('product')?'product':'local';
-  h+=`<tr><td>${s.idx}.${s.step}</td><td><span class="tag ${cls}">${s.provider}</span></td><td>${s.status}</td></tr>`;}
+ let h='<tr><th>步骤</th><th>处理方</th><th>已完成</th></tr>';
+ for(const s of j.steps){let prod=s.provider.startsWith('product');
+  let who=prod?('付费:'+s.provider.split(':')[1]):'本地';
+  h+=`<tr><td>${s.idx}. ${s.label}</td><td><span class="tag ${prod?'product':'local'}">${who}</span></td><td>${s.status}</td></tr>`;}
+ h+=`<tr><td colspan=3 class=hint style=border:0;padding-top:6px>说明:「处理方」本地=本机算/付费=用现成产品;「已完成」= 各卡点段已产出的数量(N/总段),✓=整段产出。</td></tr>`;
  G('steps').innerHTML=h;
  let o='';
  if(j.clean&&Object.keys(j.clean).length){o+='<h3>去水印产物</h3>';
@@ -698,6 +752,18 @@ async function poll(){let j=await (await fetch('/api/run/log')).json();let l=G('
  l.textContent=j.log.join('\n');l.scrollTop=l.scrollHeight;
  G('runflag').textContent=j.running?'(运行中…)':'(空闲)';
  if(j.running)setTimeout(poll,1000);else{refresh();renderAll();}}
+function _bar(label,pct,txt){return `<div class=resrow><span>${label}</span><div class=barbg>`+
+ `<div class=bar style="width:${pct==null?0:Math.min(100,pct)}%"></div></div>`+
+ `<span class=rv>${txt!=null?txt:(pct==null?'—':Math.round(pct)+'%')}</span></div>`;}
+async function pollRes(){try{let r=await (await fetch('/api/resources')).json();let g=r.gpu;
+ let h=_bar('CPU',r.cpu)+_bar('内存',r.ram);
+ if(g){h+=_bar('GPU',g.util)+_bar('显存',g.mem_used/g.mem_total*100,g.mem_used+'/'+g.mem_total+'MB');
+   h+=`<div class=hint>${g.name}</div>`;}
+ else h+='<div class=hint>无 GPU 读数</div>';
+ G('resflag').textContent=r.running?('▶ '+r.task):'空闲';
+ h+=`<div class=hint style=margin-top:4px>用时 ${r.elapsed}s`+(r.progress!=null?` · 进度 ${Math.round(r.progress*100)}%`:'')+`</div>`;
+ if(r.progress!=null)h+=_bar('进度',r.progress*100);
+ G('res').innerHTML=h;}catch(e){}}
 async function loadRaw(){G('rawcfg').value=await (await fetch('/api/config')).text();}
 async function saveRaw(){let r=await fetch('/api/config',{method:'POST',body:G('rawcfg').value});
  let j=await r.json();if(j.ok){msg('✓ YAML 已保存');boot();}else msg('✗ '+j.error);}
