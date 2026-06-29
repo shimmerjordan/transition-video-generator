@@ -52,6 +52,18 @@ def artifact_path(root: str, artifact: str) -> str:
     return os.path.join(work_root(root), _ARTIFACT_DIRS.get(artifact, artifact))
 
 
+# ---- 预处理视频标准件(去水印 / 裁剪)----
+
+def clean_path(root: str, bg_name: str) -> str:
+    """去水印后的整段背景视频。"""
+    return os.path.join(work_root(root), "clean", f"{bg_name}.mp4")
+
+
+def clip_path(root: str, clip_id: str) -> str:
+    """裁剪出的片段视频。"""
+    return os.path.join(work_root(root), "clips", f"{clip_id}.mp4")
+
+
 def frame_count(d: str) -> int:
     return len(glob.glob(os.path.join(d, "f*.png")))
 

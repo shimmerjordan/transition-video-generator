@@ -131,25 +131,31 @@ def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
     clip_id = scfg.get("background_clip")
     if not clip_id:
         raise SystemExit(f"段 {sid} 未配置 background_clip")
-    bg_path, rng, cleanup = resolve_clip(cfg, clip_id)
-    if not os.path.isfile(bg_path):
-        raise SystemExit(f"段 {sid} 背景文件不存在:{bg_path}")
-
-    info = video.video_info(bg_path)
-    fps = info["fps"] or get(cfg, "project.fps", 30)
-    start_f = int(round(float(rng[0]) * fps)) if rng and rng[0] else 0
-    raw = list(video.read_frames(bg_path, start=start_f, count=None))
-    if rng and len(rng) > 1 and rng[1]:
-        raw = raw[:max(1, int(round(float(rng[1]) * fps)) - start_f)]
-    if not raw:
-        raise SystemExit(f"段 {sid} 背景片段 {clip_id} 读到 0 帧")
-
-    # 1) 去静态元素(水印/字幕)
-    mask = build_cleanup_mask(raw[0].shape, cleanup)
-    if mask is not None:
-        raw = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in raw]
-    if cleanup.get("movers"):
-        print(f"[s4] 段 {sid}: movers(动态路人)需 provider=product 视频修复,本地跳过")
+    # 优先使用「裁剪」步骤已生成的片段视频(已去水印+已裁剪)
+    clip_video = contract.clip_path(cfg.get("_root", "."), clip_id)
+    if os.path.isfile(clip_video):
+        raw = list(video.read_frames(clip_video))
+        if not raw:
+            raise SystemExit(f"段 {sid} 片段视频读到 0 帧:{clip_video}")
+        print(f"[s4] 段 {sid}: 使用已生成片段 {clip_id}.mp4({len(raw)} 帧)")
+    else:
+        bg_path, rng, cleanup = resolve_clip(cfg, clip_id)
+        if not os.path.isfile(bg_path):
+            raise SystemExit(f"段 {sid} 背景文件不存在:{bg_path}")
+        info = video.video_info(bg_path)
+        fps = info["fps"] or get(cfg, "project.fps", 30)
+        start_f = int(round(float(rng[0]) * fps)) if rng and rng[0] else 0
+        raw = list(video.read_frames(bg_path, start=start_f, count=None))
+        if rng and len(rng) > 1 and rng[1]:
+            raw = raw[:max(1, int(round(float(rng[1]) * fps)) - start_f)]
+        if not raw:
+            raise SystemExit(f"段 {sid} 背景片段 {clip_id} 读到 0 帧")
+        # 现场去静态元素(若未走「去水印」步骤)
+        mask = build_cleanup_mask(raw[0].shape, cleanup)
+        if mask is not None:
+            raw = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in raw]
+        if cleanup.get("movers"):
+            print(f"[s4] 段 {sid}: movers 需 provider=product 视频修复,本地跳过")
 
     # 2) 去自身运镜 → 锁定平面;3) fit;4) 地面策略
     transforms = track_segment(raw) if len(raw) > 1 else [None]

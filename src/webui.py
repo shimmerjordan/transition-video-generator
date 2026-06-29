@@ -187,7 +187,14 @@ def status():
         else:
             st = " ".join(f"s{k}:{v}" for k, v in (art.get(a, {}) or {}).items()) or "—"
         rows.append({"idx": i, "step": step, "provider": prov, "status": st})
-    return {"steps": rows}
+    bgs = get(cfg, "backgrounds", {}) or {}
+    clean = {n: os.path.isfile(contract.clean_path(ROOT, n)) for n in bgs}
+    clips = {}
+    for b in bgs.values():
+        for c in b.get("clips", []) or []:
+            if c.get("id"):
+                clips[c["id"]] = os.path.isfile(contract.clip_path(ROOT, c["id"]))
+    return {"steps": rows, "clean": clean, "clips": clips}
 
 
 @app.post("/api/run")
@@ -213,9 +220,47 @@ async def run_pipeline(req: Request):
     return {"ok": True}
 
 
+@app.post("/api/run_tool")
+async def run_tool(req: Request):
+    if RUN["running"]:
+        return {"ok": False, "error": "已有任务在运行"}
+    body = await req.json()
+    tool = body.get("tool")
+    name = body.get("name") or None
+    cfg = load_config(CONFIG_PATH)
+
+    def worker():
+        RUN.update(running=True, log=[])
+        lg = lambda m: RUN["log"].append(str(m))
+        try:
+            from src import preprocess
+            if tool == "dewatermark":
+                preprocess.run_dewatermark(cfg, ROOT, name, log=lg)
+            elif tool == "clips":
+                preprocess.run_clips(cfg, ROOT, name, log=lg)
+            else:
+                lg(f"未知工具 {tool}")
+        except Exception:
+            lg("ERROR:\n" + traceback.format_exc())
+        finally:
+            RUN["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"ok": True}
+
+
 @app.get("/api/run/log")
 def run_log():
     return {"running": RUN["running"], "log": RUN["log"][-500:]}
+
+
+@app.get("/api/video")
+def video_file(path: str):
+    full = os.path.abspath(os.path.join(ROOT, path))
+    base = os.path.abspath(os.path.join(ROOT, "data"))
+    if not full.startswith(base) or not os.path.isfile(full):
+        return JSONResponse({"error": "not found"}, status_code=404)
+    return FileResponse(full, media_type="video/mp4")
 
 
 @app.get("/api/final")
@@ -240,8 +285,10 @@ header b{font-size:16px}
 nav{display:flex;gap:4px;padding:8px 14px;background:#13161c;border-bottom:1px solid #2a2f3a;flex-wrap:wrap}
 nav button{background:#222733;color:#ccd;border:1px solid #2a2f3a;border-radius:6px;padding:6px 12px;cursor:pointer}
 nav button.on{background:#2d6cdf;color:#fff}
-.layout{display:flex}main{padding:16px;max-width:820px;flex:1}
-aside{width:280px;border-left:1px solid #2a2f3a;padding:12px;background:#13161c;min-height:90vh}
+.layout{display:flex;align-items:flex-start}main{padding:16px;flex:1;min-width:0}
+aside{width:340px;border-left:1px solid #2a2f3a;padding:12px;background:#13161c;min-height:90vh;position:sticky;top:0}
+#outs div{font-size:12px;padding:1px 0}#outs .ok{color:#4ad07a}#outs .no{color:#667}
+aside video{max-height:120px}
 .tab{display:none}.tab.on{display:block}
 h2{margin:4px 0 12px;font-size:18px}h3{margin:14px 0 6px}
 .row{display:flex;align-items:center;gap:8px;margin:6px 0;flex-wrap:wrap}
@@ -294,8 +341,10 @@ font-family:Consolas,monospace;font-size:12px;padding:8px}
 <aside>
  <h3>运行 / 状态</h3><div class=row>段(留空=全部):<input id=seg size=4 placeholder=all></div>
  <table id=steps></table>
+ <div id=outs></div>
  <h3>日志 <span id=runflag class=hint></span></h3><div id=log></div>
 </aside>
+<datalist id=provlist><option>local</option><option>product:kling</option><option>product:runway</option></datalist>
 </div>
 <div id=picker><div id=pkbox>
  <div class=row>文件:<input id=pkfile size=26> 时间(秒):<input id=pktime type=number value=2 size=5>
@@ -373,7 +422,12 @@ function secClips(){CFG.backgrounds=CFG.backgrounds||{};
   b.clips.forEach((c,j)=>{h+=`<tr><td>id <input value="${c.id||''}" onchange="CFG.backgrounds['${name}'].clips[${j}].id=this.value" size=10></td>
    <td>起 <input type=number value="${c.range[0]}" onchange="CFG.backgrounds['${name}'].clips[${j}].range[0]=+this.value;renderAll();showTab('clip')" size=5></td>
    <td>止 <input type=number value="${c.range[1]}" onchange="CFG.backgrounds['${name}'].clips[${j}].range[1]=+this.value;renderAll();showTab('clip')" size=5></td></tr>`;});
-  h+=`</table><button class=alt onclick="addClip('${name}')">+ 片段</button></div>`;}
+  h+=`</table><button class=alt onclick="addClip('${name}')">+ 片段</button>
+   <div class=row style=margin-top:6px><button class=go onclick="runTool('clips','${name}')">▶ 生成片段</button>
+    <span class=hint>把每个子片段裁成独立视频(优先用去水印后的版本)</span></div>`;
+  b.clips.forEach(c=>{if(c.id)h+=`<div class=hint>${c.id}.mp4</div>
+   <video controls width=260 src="/api/video?path=data/work/clips/${c.id}.mp4&_=${Date.now()}"></video>`;});
+  h+=`</div>`;}
  h+=`<div class=sub><div class=row>新增背景名:<input id=nbgname size=8> 文件:${vidOpts('','window._nbg')}<button onclick=addBg()>+ 背景</button></div></div>`;
  return h;}
 function addClip(name){let cs=CFG.backgrounds[name].clips,dur=durOf(name);
@@ -418,7 +472,13 @@ function secWatermark(){let names=Object.keys(CFG.backgrounds||{});
  <div class=sub><div class=row>背景:${selFn(names,WMV.name,'wmSetVideo')} 类型:${selFn(['watermarks','subtitles'],WMV.kind,'wmSetKind')}</div>
   <div class=row>时间:<input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.5 value=${WMV.t} oninput="WMV.t=+this.value;wmLoad()"> <span id=wmtl>${WMV.t}s</span></div>
   <canvas id=wmcanvas width=720 height=405></canvas>
-  <div id=wmlist></div></div>`;}
+  <div id=wmlist></div>
+  <div class=row style=margin-top:10px>${provInline('cleanup','去水印工具')}
+   <button class=go onclick="runTool('dewatermark','${WMV.name}')">▶ 去水印(本背景)</button>
+   <button class=alt onclick="runTool('dewatermark','')">全部背景</button></div>
+  <div class=hint>输出(去水印后整段视频):</div>
+  <video controls src="/api/video?path=data/work/clean/${WMV.name}.mp4&_=${Date.now()}"></video>
+  </div>`;}
 function wmSetVideo(v){WMV.name=v;renderAll();showTab('wm');}
 function wmSetKind(k){WMV.kind=k;renderAll();showTab('wm');}
 function wmInit(){if(!WMV.name||!CFG.backgrounds[WMV.name])return;
@@ -530,10 +590,14 @@ function secProvider(step,label){let pv=CFG.providers=CFG.providers||{};
   <input value="${pv[step]||'local'}" onchange="CFG.providers['${step}']=this.value" list=provlist>
   <span class=hint>local 或 product:kling / product:runway</span></div>
   <datalist id=provlist><option>local</option><option>product:kling</option><option>product:runway</option></datalist></div>`;}
+function provInline(step,label){let pv=CFG.providers=CFG.providers||{};
+ return `${label}:<input value="${pv[step]||'local'}" onchange="CFG.providers['${step}']=this.value" list=provlist size=12>`;}
 function runBtn(label,steps){return `<div class=row><button class=go onclick="runSteps('${steps}')">${label}</button>
  <span class=hint>(步骤 ${steps};段见右侧)</span></div>`;}
 async function runSteps(steps){await save();
  await fetch('/api/run',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:G('seg').value,steps:steps})});poll();}
+async function runTool(tool,name){await save();
+ await fetch('/api/run_tool',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool,name})});poll();}
 
 function pickPoint(i){openPicker(CFG.input.source,'point',(x,y)=>{CFG.persons[i].seed_point=[x,y];renderAll();showTab('p2');});}
 function openPicker(file,mode,cb){_picker={file,mode,cb,pts:[]};G('pkfile').value=file||'';
@@ -547,7 +611,13 @@ async function refresh(){let j=await (await fetch('/api/status')).json();
  let h='<tr><th>步骤</th><th>provider</th><th>产物</th></tr>';
  for(const s of j.steps){let cls=s.provider.startsWith('product')?'product':'local';
   h+=`<tr><td>${s.idx}.${s.step}</td><td><span class="tag ${cls}">${s.provider}</span></td><td>${s.status}</td></tr>`;}
- G('steps').innerHTML=h;}
+ G('steps').innerHTML=h;
+ let o='';
+ if(j.clean&&Object.keys(j.clean).length){o+='<h3>去水印产物</h3>';
+  for(const n in j.clean)o+=`<div class="${j.clean[n]?'ok':'no'}">${j.clean[n]?'✓':'—'} ${n}.mp4</div>`;}
+ if(j.clips&&Object.keys(j.clips).length){o+='<h3>片段产物</h3>';
+  for(const c in j.clips)o+=`<div class="${j.clips[c]?'ok':'no'}">${j.clips[c]?'✓':'—'} ${c}.mp4</div>`;}
+ if(G('outs'))G('outs').innerHTML=o;}
 async function poll(){let j=await (await fetch('/api/run/log')).json();let l=G('log');
  l.textContent=j.log.join('\n');l.scrollTop=l.scrollHeight;
  G('runflag').textContent=j.running?'(运行中…)':'(空闲)';if(j.running)setTimeout(poll,1000);else refresh();}

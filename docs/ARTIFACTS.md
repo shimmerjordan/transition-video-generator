@@ -15,6 +15,8 @@
 
 | 名称 | 路径 | 格式 | 产出步骤 |
 |---|---|---|---|
+| clean(去水印) | `data/work/clean/<bg>.mp4` | H.264 视频(整段去水印) | 去水印 tab |
+| clips(片段) | `data/work/clips/<clipid>.mp4` | H.264 视频(裁剪出的子片段) | 裁剪 tab |
 | beats | `data/work/beats.json` | JSON(cut_times + segments[start/end 秒&帧]) | S1 |
 | src frames | `data/work/src/seg_<id>/f*.png` | BGR PNG(原始机位帧) | S2(抽帧) |
 | camera | `data/work/camera/seg_<id>.json` | JSON(每帧 2x3 仿射 A_t + meta) | S2 |
@@ -29,6 +31,12 @@
 | final | `data/output/final.mp4` | H.264+AAC | S8 |
 
 > 约定:所有 `seg_<id>/` 内帧数一致、尺寸一致(= 该段锁定域尺寸),按帧号对齐。
+
+## 每步即时运行(自带工具 + 产物)
+
+每个 tab 既是配置面板,也是一个**可独立运行**的步骤:配好该步的 provider/参数后点 ▶运行,
+立即产出上表对应的标准件。例如「去水印」运行 → `clean/<bg>.mp4`;「裁剪」运行 → 每个
+`clips/<clipid>.mp4`。下游步骤(plates 等)优先消费这些已生成的标准件。
 
 ## Provider:本地 or 现成产品
 

@@ -141,6 +141,17 @@ def mux_audio(video_path: str, audio_path: str, out_path: str,
     subprocess.run(cmd, check=True)
 
 
+def trim(src_video: str, out_path: str, start: float, end: float | None) -> None:
+    """用 ffmpeg 精确裁剪 [start,end] 秒(重编码,无音轨)。"""
+    ensure_dir(os.path.dirname(out_path))
+    cmd = [ffmpeg_exe(), "-y", "-loglevel", "error", "-ss", str(start)]
+    if end is not None:
+        cmd += ["-to", str(end)]
+    cmd += ["-i", src_video, "-an", "-c:v", "libx264", "-pix_fmt", "yuv420p",
+            "-crf", "18", out_path]
+    subprocess.run(cmd, check=True)
+
+
 def extract_audio(src_video: str, out_audio: str) -> bool:
     """从视频抽音轨;无音轨返回 False。"""
     ensure_dir(os.path.dirname(out_audio))
