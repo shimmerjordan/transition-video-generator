@@ -408,6 +408,10 @@ textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px 
 .medialbl{color:var(--mut);font-size:12px;margin-bottom:4px}
 .opts{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px 18px;margin-bottom:10px}
 .optrow{display:flex;align-items:center;gap:8px}.optrow b{min-width:72px;color:var(--mut);font-weight:500}
+.mrow{display:flex;align-items:center;gap:8px;margin:5px 0;padding:3px;border-radius:6px}
+.mrow[data-sel]{background:#1c2433;outline:1px solid var(--accent)}
+.mtrack{flex:1;height:30px;margin:0}.mtrack .blk{top:4px;height:22px}
+.mbar{position:absolute;height:8px;border-radius:4px;cursor:pointer}
 #picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.78);z-index:9;backdrop-filter:blur(2px)}
 #pkbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
 #pkimg{max-width:100%;cursor:crosshair;border:1px solid var(--line);border-radius:8px}
@@ -447,7 +451,7 @@ textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px 
 <script>
 const G=id=>document.getElementById(id);
 let CFG={},ASSETS={images:[],videos:[]},_picker=null;
-let WMV={name:null,kind:'watermarks',t:2,img:null,scale:1,scope:-1,natW:0,natH:0};
+let WMV={name:null,kind:'watermarks',t:2,img:null,scale:1,sel:-1,natW:0,natH:0};
 const TABS=[['wm','1·去水印'],['clip','2·裁剪分段'],['p1','3·时间线'],['p2','4·换背景'],
  ['p3','5·换装'],['p4','6·灯光'],['p5','7·出片'],['adv','高级']];
 
@@ -556,56 +560,70 @@ function startDrag(e,name,j,mode){e.preventDefault();e.stopPropagation();
  document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}
 
 /* ---- 去水印:画面框选 + 显示矩形 ---- */
+function marksOf(){let c=CFG.backgrounds[WMV.name].cleanup=CFG.backgrounds[WMV.name].cleanup||{};
+ c.marks=c.marks||[];return c.marks;}
 function secWatermark(){let names=Object.keys(CFG.backgrounds||{});
  if(!WMV.name||!names.includes(WMV.name))WMV.name=names[0]||null;
- if(WMV.scope==null)WMV.scope=-1;
+ if(WMV.sel==null)WMV.sel=-1;
  if(!WMV.name)return `<h2>去水印 / 字幕</h2><p class=hint>先在「裁剪/分段」添加背景。</p>`;
- let b=CFG.backgrounds[WMV.name];b.cleanup=b.cleanup||{};let regs=b.cleanup.regions=b.cleanup.regions||[];
- let dur=durOf(WMV.name);
- // 作用范围:全段 + 各分段区间
- let scopeOpts=`<option value=-1 ${WMV.scope==-1?'selected':''}>全段(整段都去)</option>`+
-  regs.map((r,i)=>`<option value=${i} ${WMV.scope==i?'selected':''}>区间${i} [${r.range[0]}~${r.range[1]}s]</option>`).join('');
- let rangeEdit = WMV.scope>=0 ? `<div class=row><label>区间</label>
-   起<input type=number value="${regs[WMV.scope].range[0]}" onchange="CFG.backgrounds['${WMV.name}'].cleanup.regions[${WMV.scope}].range[0]=+this.value;renderAll();showTab('wm')" size=5 style=width:62px>
-   止<input type=number value="${regs[WMV.scope].range[1]}" onchange="CFG.backgrounds['${WMV.name}'].cleanup.regions[${WMV.scope}].range[1]=+this.value;renderAll();showTab('wm')" size=5 style=width:62px>
-   <button class=alt onclick="wmSetRange(0)">起=指针</button><button class=alt onclick="wmSetRange(1)">止=指针</button>
-   <button class=alt onclick="wmDelRegion()">删区间</button></div>` : '';
- return `<h2>去水印 / 字幕</h2>
- <p class=phasehint>不同片段水印/字幕位置不同时,用「分段区间」分别框选:选「全段」对整段生效;或新增区间只对某时间段生效。在画面上按住拖矩形,红框=已选区域。</p>
+ let dur=durOf(WMV.name),marks=marksOf();let d=CFG.dewatermark=CFG.dewatermark||{};
+ if(WMV.sel>=marks.length)WMV.sel=-1;
+ return `<h2>去水印 / 字幕(多轨道)</h2>
+ <p class=phasehint>像剪辑软件:每个要去除的印记是一条轨道,拖动其时间条设定生效时段;选中某轨后在下方画面框选它在该段的清除区域。总轨道总览全部印记。</p>
  <div class=sub>
   <div class=opts>
    <div class=optrow><b>背景</b>${selFn(names,WMV.name,'wmSetVideo')}</div>
-   <div class=optrow><b>类型</b>${selFn(['watermarks','subtitles'],WMV.kind,'wmSetKind')}</div>
-   <div class=optrow><b>作用范围</b><select onchange="wmSetScope(this.value)">${scopeOpts}</select>
-     <button class=alt onclick="wmAddRegion()">+ 区间</button></div>
    <div class=optrow><b>去水印工具</b><input value="${(CFG.providers||{}).cleanup||'local'}" onchange="CFG.providers.cleanup=this.value" list=provlist size=12></div>
-   <div class=optrow><b>修复引擎</b>${(()=>{let d=CFG.dewatermark=CFG.dewatermark||{};return sel(['cv2','sd'],d.engine||'cv2','CFG.dewatermark.engine')})()}
-     <span class=hint>cv2=快 / sd=GPU扩散(质量好慢)</span></div>
-   <div class=optrow><b>SD步数</b><input type=number value="${(CFG.dewatermark||{}).steps||25}" onchange="CFG.dewatermark.steps=+this.value" size=4 style=width:60px></div>
+   <div class=optrow><b>修复引擎</b>${sel(['cv2','sd'],d.engine||'cv2','CFG.dewatermark.engine')}<span class=hint>cv2=快 / sd=GPU扩散(质量好慢)</span></div>
+   <div class=optrow><b>SD步数</b><input type=number value="${d.steps||25}" onchange="CFG.dewatermark.steps=+this.value" size=4 style=width:60px></div>
   </div>
-  ${rangeEdit}
-  <div class=row>时间 <input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.2 value=${WMV.t} oninput="WMV.t=+this.value;wmLoad()" style=flex:1> <span id=wmtl>${WMV.t}</span>s</div>
+  <div class=row>时间 <input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.1 value=${WMV.t} oninput="WMV.t=+this.value;wmScrub()" style=flex:1> <span id=wmtl>${WMV.t}</span>s
+   <button class=alt onclick="wmAddMark()">+ 新增印记轨</button></div>
+  <div class=medialbl>总轨道(${marks.length} 个印记;点条选中)</div>
+  ${wmMaster(dur,marks)}
+  ${marks.map((mk,i)=>wmTrackRow(i,mk,dur)).join('')||'<div class=hint>还没有印记轨,点「+ 新增印记轨」</div>'}
   <div class=mediarow>
-   <div><div class=medialbl>原始(框选)</div><canvas id=wmcanvas class=media></canvas></div>
+   <div><div class=medialbl>原始(选中轨后框选)</div><canvas id=wmcanvas class=media></canvas></div>
    <div><div class=medialbl>输出(去水印后)</div><video class=media controls src="/api/video?path=data/work/clean/${WMV.name}.mp4&_=${Date.now()}"></video></div>
   </div>
   <div id=wmlist></div>
   <div class=row style=margin-top:10px>
    <button class=go onclick="runTool('dewatermark','${WMV.name}')">▶ 去水印(本背景)</button>
-   <button class=alt onclick="runTool('dewatermark','')">全部背景</button>
-   <span class=hint>local=本地 cv2 修复;product:* 走付费(动态路人用)</span></div>
+   <button class=alt onclick="runTool('dewatermark','')">全部背景</button></div>
   </div>`;}
-function wmSetVideo(v){WMV.name=v;WMV.scope=-1;renderAll();showTab('wm');}
-function wmSetKind(k){WMV.kind=k;renderAll();showTab('wm');}
-function wmSetScope(v){WMV.scope=parseInt(v);renderAll();showTab('wm');}
-function wmAddRegion(){let c=CFG.backgrounds[WMV.name].cleanup;c.regions=c.regions||[];
- let s=+WMV.t||0;c.regions.push({range:[r1(s),r1(Math.min(durOf(WMV.name),s+3))],watermarks:[],subtitles:[]});
- WMV.scope=c.regions.length-1;renderAll();showTab('wm');}
-function wmDelRegion(){CFG.backgrounds[WMV.name].cleanup.regions.splice(WMV.scope,1);WMV.scope=-1;renderAll();showTab('wm');}
-function wmSetRange(i){CFG.backgrounds[WMV.name].cleanup.regions[WMV.scope].range[i]=r1(+WMV.t||0);renderAll();showTab('wm');}
-function wmArr(){let c=CFG.backgrounds[WMV.name].cleanup=CFG.backgrounds[WMV.name].cleanup||{};
- if(WMV.scope<0){c[WMV.kind]=c[WMV.kind]||[];return c[WMV.kind];}
- c.regions=c.regions||[];let r=c.regions[WMV.scope];if(!r)return [];r[WMV.kind]=r[WMV.kind]||[];return r[WMV.kind];}
+function wmMaster(dur,marks){let ph=`<div class=playhead id=wmph style=left:${(WMV.t/dur*100)}%></div>`;
+ let bars=marks.map((mk,i)=>{let l=mk.range[0]/dur*100,w=(mk.range[1]-mk.range[0])/dur*100;
+  let c=mk.kind=='subtitles'?'#f59e0b':'#3b82f6';let top=6+(i%4)*11;
+  return `<div class=mbar style="left:${l}%;width:${w}%;top:${top}px;background:${c};${WMV.sel==i?'outline:2px solid #fff':''}" title="${mk.kind}" onclick="wmSelMark(${i})"></div>`;}).join('');
+ return `<div class=track id=wmmaster style=height:56px>${ph}${bars}</div>`;}
+function wmTrackRow(i,mk,dur){let sel=WMV.sel==i;let l=mk.range[0]/dur*100,w=(mk.range[1]-mk.range[0])/dur*100;
+ let c=mk.kind=='subtitles'?'#f59e0b':'#3b82f6';
+ return `<div class=mrow ${sel?'data-sel=1':''}>
+   <select onchange="marksOf()[${i}].kind=this.value;renderAll();showTab('wm')" style=width:78px>
+    <option value=watermarks ${mk.kind!='subtitles'?'selected':''}>水印</option>
+    <option value=subtitles ${mk.kind=='subtitles'?'selected':''}>字幕</option></select>
+   <div class="track mtrack" id=wmtrk_${i} onpointerdown="wmSelMark(${i})">
+    <div class=blk id=wmbar_${i} style="left:${l}%;width:${w}%;background:${c}aa;border-color:${c}" onpointerdown="event.stopPropagation();wmDragMark(event,${i},'move')">
+     <div class=hl onpointerdown="event.stopPropagation();wmDragMark(event,${i},'l')"></div>
+     <span class=lbl>${r1(mk.range[0])}~${r1(mk.range[1])}s ${mk.rect?'✓':'(未框选)'}</span>
+     <div class=hr onpointerdown="event.stopPropagation();wmDragMark(event,${i},'r')"></div></div></div>
+   <button class=alt onclick="wmSelMark(${i})">${sel?'● 选中':'选'}</button>
+   <button class=alt onclick="marksOf().splice(${i},1);WMV.sel=-1;renderAll();showTab('wm')">删</button></div>`;}
+function wmSetVideo(v){WMV.name=v;WMV.sel=-1;renderAll();showTab('wm');}
+function wmSelMark(i){WMV.sel=i;let mk=marksOf()[i];if(mk)WMV.t=r1((mk.range[0]+mk.range[1])/2);renderAll();showTab('wm');}
+function wmAddMark(){let s=+WMV.t||0;marksOf().push({id:'mark'+marksOf().length,kind:'watermarks',
+  range:[r1(s),r1(Math.min(durOf(WMV.name),s+3))],rect:null});WMV.sel=marksOf().length-1;renderAll();showTab('wm');}
+function wmScrub(){if(G('wmtl'))G('wmtl').textContent=WMV.t;let dur=durOf(WMV.name);
+ let ph=G('wmph');if(ph)ph.style.left=(WMV.t/dur*100)+'%';wmLoad();}
+function wmDragMark(e,i,mode){e.preventDefault();e.stopPropagation();WMV.sel=i;
+ let trk=G('wmtrk_'+i),dur=durOf(WMV.name),pxs=trk.clientWidth/dur,mk=marksOf()[i],sx=e.clientX,o=[mk.range[0],mk.range[1]];
+ function mv(ev){let dd=(ev.clientX-sx)/pxs;
+  if(mode=='move'){let len=o[1]-o[0],ns=Math.max(0,Math.min(o[0]+dd,dur-len));mk.range=[r1(ns),r1(ns+len)];}
+  else if(mode=='l'){mk.range[0]=Math.max(0,Math.min(r1(o[0]+dd),mk.range[1]-0.2));}
+  else if(mode=='r'){mk.range[1]=Math.min(dur,Math.max(r1(o[1]+dd),mk.range[0]+0.2));}
+  let b=G('wmbar_'+i);if(b){b.style.left=(mk.range[0]/dur*100)+'%';b.style.width=((mk.range[1]-mk.range[0])/dur*100)+'%';}}
+ function up(){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);renderAll();showTab('wm');}
+ document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}
 function wmInit(){if(!WMV.name||!CFG.backgrounds[WMV.name])return;if(G('wmcanvas'))wmLoad();}
 function wmLoad(){if(!G('wmcanvas')||!WMV.name)return;if(G('wmtl'))G('wmtl').textContent=WMV.t;
  let img=new Image();img.onload=()=>{WMV.img=img;WMV.natW=img.naturalWidth;WMV.natH=img.naturalHeight;
@@ -614,25 +632,26 @@ function wmLoad(){if(!G('wmcanvas')||!WMV.name)return;if(G('wmtl'))G('wmtl').tex
  img.src='/api/frame_at?file='+encodeURIComponent(CFG.backgrounds[WMV.name].file)+'&t='+WMV.t+'&_='+Date.now();}
 function wmDraw(temp){let cv=G('wmcanvas');if(!cv)return;let ctx=cv.getContext('2d');ctx.clearRect(0,0,cv.width,cv.height);
  if(WMV.img)ctx.drawImage(WMV.img,0,0,cv.width,cv.height);
- let arr=wmArr();ctx.lineWidth=2;ctx.strokeStyle='#ff4444';ctx.fillStyle='rgba(255,68,68,.25)';
- arr.forEach(r=>{let x=r[0]*WMV.scale,y=r[1]*WMV.scale,w=(r[2]-r[0])*WMV.scale,hh=(r[3]-r[1])*WMV.scale;ctx.fillRect(x,y,w,hh);ctx.strokeRect(x,y,w,hh);});
+ let t=+WMV.t||0;
+ marksOf().forEach((mk,i)=>{if(!mk.rect)return;let act=mk.range[0]<=t&&t<=mk.range[1];let seld=i==WMV.sel;
+  let col=seld?'#ff3b3b':(mk.kind=='subtitles'?'#f59e0b':'#3b82f6');
+  ctx.globalAlpha=act?1:0.3;ctx.lineWidth=seld?2.5:1.5;ctx.strokeStyle=col;
+  let r=mk.rect,x=r[0]*WMV.scale,y=r[1]*WMV.scale,w=(r[2]-r[0])*WMV.scale,hh=(r[3]-r[1])*WMV.scale;
+  if(seld){ctx.fillStyle='rgba(255,59,59,.22)';ctx.fillRect(x,y,w,hh);}ctx.strokeRect(x,y,w,hh);ctx.globalAlpha=1;});
  if(temp){ctx.strokeStyle='#44ff88';ctx.lineWidth=2;ctx.strokeRect(temp.x,temp.y,temp.w,temp.h);}}
 function wmAttach(cv){if(cv._a)return;cv._a=1;let st=null;
- const toImg=e=>{let r=cv.getBoundingClientRect();
-   return [(e.clientX-r.left)*WMV.natW/r.width,(e.clientY-r.top)*WMV.natH/r.height];};
- cv.addEventListener('pointerdown',e=>{st=toImg(e);});
+ const toImg=e=>{let r=cv.getBoundingClientRect();return [(e.clientX-r.left)*WMV.natW/r.width,(e.clientY-r.top)*WMV.natH/r.height];};
+ cv.addEventListener('pointerdown',e=>{if(WMV.sel<0){msg('先选中或新增一个印记轨');return;}st=toImg(e);});
  cv.addEventListener('pointermove',e=>{if(!st)return;let p=toImg(e);
-  wmDraw({x:Math.min(st[0],p[0])*WMV.scale,y:Math.min(st[1],p[1])*WMV.scale,
-   w:Math.abs(p[0]-st[0])*WMV.scale,h:Math.abs(p[1]-st[1])*WMV.scale});});
+  wmDraw({x:Math.min(st[0],p[0])*WMV.scale,y:Math.min(st[1],p[1])*WMV.scale,w:Math.abs(p[0]-st[0])*WMV.scale,h:Math.abs(p[1]-st[1])*WMV.scale});});
  let fin=e=>{if(!st)return;let p=toImg(e);
   let x0=Math.min(st[0],p[0]),y0=Math.min(st[1],p[1]),x1=Math.max(st[0],p[0]),y1=Math.max(st[1],p[1]);st=null;
   if(Math.abs(x1-x0)<5||Math.abs(y1-y0)<5){wmDraw();return;}
-  wmArr().push([Math.round(x0),Math.round(y0),Math.round(x1),Math.round(y1)]);wmDraw();wmList();};
+  marksOf()[WMV.sel].rect=[Math.round(x0),Math.round(y0),Math.round(x1),Math.round(y1)];wmDraw();wmList();renderAll();showTab('wm');};
  cv.addEventListener('pointerup',fin);cv.addEventListener('pointerleave',fin);}
-function wmList(){let arr=wmArr();let scope=WMV.scope<0?'全段':('区间'+WMV.scope);
- let h=`<div class=hint>${scope} · ${WMV.kind} 矩形:</div><table>`;
- arr.forEach((r,k)=>{h+=`<tr><td>${r.join(', ')}</td><td><button class=alt onclick="wmArr().splice(${k},1);wmDraw();wmList()">删</button></td></tr>`;});
- h+='</table>';if(G('wmlist'))G('wmlist').innerHTML=h;}
+function wmList(){let m=WMV.sel>=0?marksOf()[WMV.sel]:null;if(!G('wmlist'))return;
+ G('wmlist').innerHTML = m ? `<div class=hint>选中轨 #${WMV.sel}(${m.kind=='subtitles'?'字幕':'水印'}) 时段 ${m.range[0]}~${m.range[1]}s · 区域 ${m.rect?m.rect.join(', '):'未框选(在画面拖一个矩形)'}</div>`
+   : '<div class=hint>未选中印记轨</div>';}
 
 /* ---- 阶段1:时间线 ---- */
 function allClipIds(){let ids=[];for(const n in CFG.backgrounds)for(const c of (CFG.backgrounds[n].clips||[]))if(c.id)ids.push(c.id);return ids;}

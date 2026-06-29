@@ -30,17 +30,23 @@ def _bg_file(cfg: dict, bg: dict) -> str:
 
 
 def active_rects(cleanup: dict, t: float) -> list:
-    """返回在时刻 t 生效的去除矩形:全段(legacy watermarks/subtitles)+ 命中 t 的分段 regions。"""
+    """返回在时刻 t 生效的去除矩形:marks(每印记一轨,带 range)+ 兼容旧 regions / 全段。"""
     rects = list(cleanup.get("watermarks", []) or []) + list(cleanup.get("subtitles", []) or [])
     for reg in cleanup.get("regions", []) or []:
         rng = reg.get("range")
         if rng is None or (float(rng[0]) <= t <= float(rng[1])):
             rects += list(reg.get("watermarks", []) or []) + list(reg.get("subtitles", []) or [])
+    for mk in cleanup.get("marks", []) or []:
+        rng = mk.get("range")
+        if mk.get("rect") and (rng is None or (float(rng[0]) <= t <= float(rng[1]))):
+            rects.append(mk["rect"])
     return [list(map(int, r)) for r in rects]
 
 
 def has_any_rects(cleanup: dict) -> bool:
     if cleanup.get("watermarks") or cleanup.get("subtitles"):
+        return True
+    if any(m.get("rect") for m in (cleanup.get("marks", []) or [])):
         return True
     return any((reg.get("watermarks") or reg.get("subtitles"))
                for reg in (cleanup.get("regions", []) or []))
