@@ -267,7 +267,8 @@ font-family:Consolas,monospace;font-size:12px;padding:8px}
 .hl,.hr{position:absolute;top:0;width:9px;height:100%;cursor:ew-resize;background:#5b8def}
 .hl{left:0;border-radius:4px 0 0 4px}.hr{right:0;border-radius:0 4px 4px 0}
 .blk .del{position:absolute;top:-8px;right:-6px;background:#a33;border:0;color:#fff;border-radius:9px;padding:0 5px;cursor:pointer;font-size:11px}
-.prev{height:150px;border:1px solid #2a2f3a;border-radius:6px;background:#000}
+.prev{width:100%;max-height:340px;object-fit:contain;border:1px solid #2a2f3a;border-radius:6px;background:#000;display:block}
+.playhead{position:absolute;top:0;width:0;border-left:2px solid #ffd400;height:100%;z-index:5;pointer-events:none}
 #wmcanvas{border:1px solid #2a2f3a;border-radius:6px;cursor:crosshair;max-width:100%;touch-action:none}
 #picker{display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:9}
 #pkbox{background:#171a21;border:1px solid #2a2f3a;border-radius:8px;padding:14px;max-width:92vw;margin:3vh auto;overflow:auto;max-height:92vh}
@@ -306,8 +307,8 @@ font-family:Consolas,monospace;font-size:12px;padding:8px}
 const G=id=>document.getElementById(id);
 let CFG={},ASSETS={images:[],videos:[]},_picker=null;
 let WMV={name:null,kind:'watermarks',t:2,img:null,scale:1};
-const TABS=[['clip','0·裁剪/分段'],['wm','去水印'],['p1','1·时间线'],['p2','2·换背景'],
- ['p3','3·换装'],['p4','4·灯光'],['p5','5·出片'],['adv','高级']];
+const TABS=[['wm','1·去水印'],['clip','2·裁剪分段'],['p1','3·时间线'],['p2','4·换背景'],
+ ['p3','5·换装'],['p4','6·灯光'],['p5','7·出片'],['adv','高级']];
 
 function buildNav(){G('nav').innerHTML=TABS.map(([k,n])=>`<button id=nav_${k} onclick=showTab('${k}')>${n}</button>`).join('');}
 function showTab(k){TABS.forEach(([t])=>{G('t_'+t).classList.toggle('on',t==k);G('nav_'+t).classList.toggle('on',t==k);});
@@ -328,7 +329,7 @@ function durOf(name){let f=(CFG.backgrounds[name]||{}).file;let v=ASSETS.videos.
 async function boot(){buildNav();
  CFG=await (await fetch('/api/config.json')).json();
  ASSETS=await (await fetch('/api/assets')).json();
- renderAll();showTab('clip');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);refresh();}
+ renderAll();showTab('wm');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);refresh();}
 function renderAll(){
  G('t_clip').innerHTML=secInputs()+secClips();
  G('t_wm').innerHTML=secWatermark();
@@ -337,7 +338,7 @@ function renderAll(){
  G('t_p3').innerHTML=secProvider('garment','换装')+secGarmentSched()+runBtn('▶ 运行换装','5');
  G('t_p4').innerHTML=secProvider('relight','灯光')+secRelight()+runBtn('▶ 运行灯光','6');
  G('t_p5').innerHTML=secComposite()+runBtn('▶ 合成出片','7,8')+secFinal();
- wmInit();}
+ clipsInit();wmInit();}
 async function save(){let r=await fetch('/api/config.json',{method:'POST',headers:{'Content-Type':'application/json'},
  body:JSON.stringify(CFG)});let j=await r.json();
  if(j.ok){msg('✓ 已保存');CFG=await (await fetch('/api/config.json')).json();ASSETS=await (await fetch('/api/assets')).json();renderAll();}
@@ -354,11 +355,12 @@ function secInputs(){let inp=CFG.input=CFG.input||{};return `<h2>0 · 裁剪 / �
 
 /* ---- 裁剪:时间轨道 ---- */
 function secClips(){CFG.backgrounds=CFG.backgrounds||{};
- let h=`<div class=sub><div class=row><img id=clipprev class=prev src=""><span class=hint id=clipprevlbl>拖动片段查看该时刻</span></div></div>`;
+ let h=`<h2>2 · 裁剪 / 分段</h2><p class=phasehint>点轨道任意处移动黄色指针查看该时刻画面;拖片段块移动、拖两端手柄改起止。画面始终显示当前指针处。</p>`;
  for(const name of Object.keys(CFG.backgrounds)){let b=CFG.backgrounds[name];b.clips=b.clips||[];let dur=durOf(name);
   h+=`<div class=sub><div class=row><b>${name}</b> 文件:${vidOpts(b.file,`CFG.backgrounds['${name}'].file`)} <span class=hint>时长 ${dur}s</span>
    <button class=alt onclick="delete CFG.backgrounds['${name}'];renderAll();showTab('clip')">删背景</button></div>
-   <div class=track id=trk_${name}>`;
+   <img id="pv_${name}" class=prev src=""><div class=hint>指针 <span id="pvl_${name}">0</span>s</div>
+   <div class=track id="trk_${name}" onpointerdown="trackDown(event,'${name}')"><div class=playhead id="ph_${name}"></div>`;
   let step=Math.max(1,Math.round(dur/10));
   for(let s=0;s<=dur;s+=step)h+=`<span class=tick style=left:${s/dur*100}%>${s}</span>`;
   b.clips.forEach((c,j)=>{c.range=c.range||[0,5];let l=c.range[0]/dur*100,w=(c.range[1]-c.range[0])/dur*100;
@@ -379,21 +381,30 @@ function addClip(name){let cs=CFG.backgrounds[name].clips,dur=durOf(name);
  cs.push({id:name+'_'+cs.length,range:[r1(st),r1(Math.min(dur,st+5))]});renderAll();showTab('clip');}
 function addBg(){let n=G('nbgname').value.trim();if(!n||!window._nbg){msg('填名并选文件');return;}
  CFG.backgrounds[n]={file:window._nbg,clips:[],cleanup:{watermarks:[],subtitles:[],movers:[]}};window._nbg='';renderAll();showTab('clip');}
-let _pvt=0;
-function previewAt(name,t){let now=Date.now();if(now-_pvt<110)return;_pvt=now;
- G('clipprev').src='/api/frame_at?file='+encodeURIComponent(CFG.backgrounds[name].file)+'&t='+t+'&_='+now;
- G('clipprevlbl').textContent=name+' @ '+r1(t)+'s';}
+let CURT={},_pvt={};
+function clipsInit(){for(const name in CFG.backgrounds){let cs=CFG.backgrounds[name].clips||[];
+  if(CURT[name]==null)CURT[name]=cs.length?cs[0].range[0]:0;
+  layoutPlayhead(name);setPrev(name,true);}}
+function layoutPlayhead(name){let ph=G('ph_'+name);if(ph)ph.style.left=(CURT[name]/durOf(name)*100)+'%';
+ let lbl=G('pvl_'+name);if(lbl)lbl.textContent=r1(CURT[name]);}
+function setPrev(name,force){let now=Date.now();if(!force&&now-(_pvt[name]||0)<110)return;_pvt[name]=now;
+ let pv=G('pv_'+name);if(pv)pv.src='/api/frame_at?file='+encodeURIComponent(CFG.backgrounds[name].file)+'&t='+CURT[name]+'&_='+now;}
+function trackDown(e,name){scrub(e,name);
+ let mv=ev=>scrub(ev,name),up=()=>{document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);};
+ document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}
+function scrub(e,name){let trk=G('trk_'+name),r=trk.getBoundingClientRect(),dur=durOf(name);
+ CURT[name]=r1(Math.max(0,Math.min(dur,(e.clientX-r.left)/r.width*dur)));layoutPlayhead(name);setPrev(name);}
 function layoutBlk(name,j){let dur=durOf(name),c=CFG.backgrounds[name].clips[j],b=G('blk_'+name+'_'+j);
  if(b){b.style.left=(c.range[0]/dur*100)+'%';b.style.width=((c.range[1]-c.range[0])/dur*100)+'%';
   let lbl=b.querySelector('.lbl');if(lbl)lbl.textContent=r1(c.range[0])+'~'+r1(c.range[1])+'s';}}
-function startDrag(e,name,j,mode){e.preventDefault();
+function startDrag(e,name,j,mode){e.preventDefault();e.stopPropagation();
  let track=G('trk_'+name),dur=durOf(name),pxs=track.clientWidth/dur;
  let clip=CFG.backgrounds[name].clips[j],sx=e.clientX,o=[clip.range[0],clip.range[1]];
  function mv(ev){let d=(ev.clientX-sx)/pxs;
-  if(mode=='move'){let len=o[1]-o[0],ns=Math.max(0,Math.min(o[0]+d,dur-len));clip.range=[r1(ns),r1(ns+len)];}
-  else if(mode=='l'){clip.range[0]=Math.max(0,Math.min(r1(o[0]+d),clip.range[1]-0.2));}
-  else if(mode=='r'){clip.range[1]=Math.min(dur,Math.max(r1(o[1]+d),clip.range[0]+0.2));}
-  layoutBlk(name,j);previewAt(name,mode=='r'?clip.range[1]:clip.range[0]);}
+  if(mode=='move'){let len=o[1]-o[0],ns=Math.max(0,Math.min(o[0]+d,dur-len));clip.range=[r1(ns),r1(ns+len)];CURT[name]=clip.range[0];}
+  else if(mode=='l'){clip.range[0]=Math.max(0,Math.min(r1(o[0]+d),clip.range[1]-0.2));CURT[name]=clip.range[0];}
+  else if(mode=='r'){clip.range[1]=Math.min(dur,Math.max(r1(o[1]+d),clip.range[0]+0.2));CURT[name]=clip.range[1];}
+  layoutBlk(name,j);layoutPlayhead(name);setPrev(name);}
  function up(){document.removeEventListener('pointermove',mv);document.removeEventListener('pointerup',up);renderAll();showTab('clip');}
  document.addEventListener('pointermove',mv);document.addEventListener('pointerup',up);}
 
