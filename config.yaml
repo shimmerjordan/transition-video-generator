@@ -28,6 +28,7 @@ beats:
   detect: auto                # auto = librosa 自动卡点;manual = 用下方 override
   subdivide: 1                # 每 N 拍切一次(1=每拍,2=隔拍)
   override_seconds: []        # 手动卡点时间戳(秒),非空则覆盖自动结果
+  include_start_end: true     # 用 0 和音频结尾把首尾补成完整段
 
 # 每个节拍段的映射:背景素材、衣服参考图、光照目标。
 # 段数 = 卡点数;person_a/person_b 分别对应两位舞者的衣服参考图。

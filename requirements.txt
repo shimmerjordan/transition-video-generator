@@ -1,0 +1,25 @@
+# 分阶段依赖:按管线步骤逐步启用,避免一次性装齐重型包。
+
+# --- 基础 / S1 卡点(现已实现)---
+pyyaml
+numpy
+librosa
+soundfile
+matplotlib            # 仅 --plot 可视化时需要,可选
+
+# --- S2 运镜跟踪 / S4 背景稳定化(后续)---
+opencv-python
+# imageio-ffmpeg      # 备用的帧 I/O / 编码
+
+# --- S3 抠像(后续)---
+# torch               # 装与本机 CUDA 匹配的版本(见 PLAN「环境搭建」)
+# 'sam2 @ git+https://github.com/facebookresearch/sam2.git'
+
+# --- S5 换装 / S6 重打光(后续)---
+# diffusers
+# transformers
+# accelerate
+# controlnet-aux       # DWPose / depth 预处理
+# 'IC-Light 按其仓库说明安装'
+
+# 系统级:需另装 ffmpeg 并加入 PATH
