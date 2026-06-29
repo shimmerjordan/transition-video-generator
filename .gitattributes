@@ -1,0 +1,13 @@
+# 统一文本文件换行符为 LF,避免跨平台噪音
+* text=auto eol=lf
+
+# 媒体/权重按二进制处理
+*.mp4 binary
+*.mov binary
+*.wav binary
+*.mp3 binary
+*.png binary
+*.jpg binary
+*.safetensors binary
+*.ckpt binary
+*.pth binary

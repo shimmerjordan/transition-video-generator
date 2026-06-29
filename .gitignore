@@ -1,0 +1,18 @@
+# 大文件 / 生成物 / 权重,不入库
+data/input/*.mp4
+data/input/*.mov
+data/input/*.wav
+data/input/*.mp3
+data/input/backgrounds/*
+data/input/garments/*
+data/work/*
+data/output/*
+models/*
+
+# 保留目录结构
+!**/.gitkeep
+
+# Python
+.venv/
+__pycache__/
+*.pyc
