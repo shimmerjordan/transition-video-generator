@@ -14,9 +14,24 @@
 
 ## 现状
 
-- 阶段:**研究 / 立项**(代码未实现,先建结构与方案)。
-- 环境:工作区对视频处理全新,需从零搭建独立 Python venv。
-- 硬件:中低端 N 卡(8–12GB),分段短片处理适配。
+- 阶段:**全管线 S1–S8 已实现,可离线端到端跑通**(合成素材已验证出片)。
+  - **纯 CV 环节真实可用**:S1 卡点、S2 运镜跟踪/反稳定、S3 抠像(时序中值)、S4 背景稳定+光照估计、S7 真实度合成、S8 贴回运镜+转场+混音。
+  - **GPU 环节惰性降级**:S5 换装(SD+ControlNet)、S6 重打光(IC-Light)目前走 passthrough/soft_match,**装上模型即升级**为真实效果。
+- 环境:已建 `.venv`(Python 3.13)并装好 CV 依赖(见 requirements.txt)。
+- 硬件:中低端 N 卡(8–12GB);GPU 步骤接入后按需启用。
+
+## 运行
+
+```bash
+# 1) 准备素材到 data/input/(source.mp4 / music.wav / backgrounds/ / garments/),并在 config.yaml 配置 segments
+# 2) 单段 POC(推荐先跑通):
+.venv/Scripts/python src/pipeline.py --segment 0
+# 3) 全片:
+.venv/Scripts/python src/pipeline.py
+# 也可分步:--steps 2-7;单步:python src/s2_camera.py --segment 0
+```
+
+产物在 `data/work/`(各步骤中间帧)与 `data/output/final.mp4`。
 
 ## 管线概览
 
