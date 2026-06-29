@@ -9,6 +9,10 @@ opencv-python         # S2 运镜跟踪 / S3 抠像 / S4 稳定化 / S7 合成
 imageio-ffmpeg        # 自带 ffmpeg 二进制:编码 + 音频混流(无需系统 ffmpeg)
 matplotlib            # 仅 S1 --plot 可视化时需要,可选
 
+# --- Web 配置前端(已实现)---
+fastapi
+uvicorn[standard]
+
 # --- S3 抠像(后续)---
 # torch               # 装与本机 CUDA 匹配的版本(见 PLAN「环境搭建」)
 # 'sam2 @ git+https://github.com/facebookresearch/sam2.git'

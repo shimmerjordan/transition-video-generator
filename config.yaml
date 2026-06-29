@@ -1,76 +1,101 @@
-# transition-video-generator 中枢配置(模板)
-# 实现各步骤后,此文件驱动全片一键复算。
+# transition-video-generator 中枢配置 v2
+# 围绕「付费产品 / 本地」可配置编排;每步统一标准件 I/O(见 docs/ARTIFACTS.md)。
 
 project:
-  fps: 30                      # 源片帧率(实现时读取并校正)
-  resolution: [1920, 1080]    # 目标分辨率
-  subjects: 2                  # 主体数量(通用:1=单人,2=双人...)
-  enable_garment_swap: true   # 是否换装(可关)
-  enable_relight: true        # 是否重打光(可关)
-  transition: hard_cut        # 转场方式:hard_cut | crossfade | mask_wipe
-  transition_frames: 5        # crossfade/mask_wipe 的过渡帧数(hard_cut 忽略)
+  fps: 30
+  resolution: [1280, 720]
+  transition: hard_cut          # hard_cut | crossfade | mask_wipe
+  transition_frames: 5
+
+# 每步选 本地 or 现成产品(product:* 走 handoff)。camera/composite/assemble 固定本地。
+providers:
+  matte:   local                # 抠像: local(SAM2/median) | product:runway | product:<name>
+  cleanup: local                # 去水印/路人: local(cv2.inpaint 静态mask) | product:runway
+  ground:  local                # 地面: local(as_is/virtual_plane) | product:kling(生成补地面)
+  garment: local                # 换装: local(passthrough/SD) | product:kling | product:runway
+  relight: local                # 重打光: local(IC-Light/soft_match) | product:<name>
 
 input:
-  source: data/input/source.mp4
-  music: data/input/music.wav
-  backgrounds_dir: data/input/backgrounds
-  garments_dir: data/input/garments
+  source: ../source/dance.mp4   # 跳舞视频(真实素材在 e:\data\workspace\source\)
+  music: data/input/music.wav   # 卡点音乐(请放入;dance 自带音轨可另配)
+  backgrounds_dir: ../source
+  garments_dir: ../source
 
-# 运镜处理(源片可能有视角移动):在锁定域合成,最后把源片运镜贴回成片。
-camera:
-  mode: auto                  # auto=自动判定 | locked=固定机位跳过 | motion_2d=2D反贴(默认策略) | motion_3d=三维解算(强视差)
-  exclude_subjects: true      # 跟踪相机时用主体 mask 排除舞者区域
-  overscan: 0.12              # 背景/合成预留余量(占比),贴回运镜后裁掉,防边缘露空
-  motion3d:
-    solver: colmap            # motion_3d 时的相机解算器:colmap | droid_slam
-    depth: monocular          # 深度来源,用于深度平面重投影产生视差
+# 人物身份(matte 用;SAM2 用 seed_point 初始化轨迹;name 便于配置换装)
+persons:
+  - { id: p0, name: 男舞者, seed_point: [820, 360] }   # 在锁定域首帧上该人大致像素位置
+  - { id: p1, name: 女舞者, seed_point: [470, 380] }
+
+# 服装库(相对 garments_dir)
+garments:
+  cloth1: cloth1.jpg            # 壮族红色盛装(女,含头饰)
+  cloth2: cloth2.jpg            # 白上衣+墨绿长裙(女)
+
+# 背景库:每个视频可切多个命名子片段(秒);cleanup 给静态去元素的 mask 矩形(原分辨率 [x0,y0,x1,y1])
+backgrounds:
+  meadow:
+    file: bg1.mp4
+    clips:
+      - { id: meadow_a, range: [10, 18] }
+      - { id: meadow_b, range: [60, 70] }
+    cleanup:
+      watermarks: [[1120, 20, 1260, 70]]      # bilibili 水印
+      subtitles:  [[0, 640, 1280, 720]]       # 底部字幕条
+      movers: []                               # 走动路人→留空交给 product/video-inpaint
+  night:
+    file: bg2.mp4
+    clips:
+      - { id: night_a, range: [2, 10] }
+    cleanup:
+      watermarks: [[0, 10, 180, 60]]
 
 beats:
-  detect: auto                # auto = librosa 自动卡点;manual = 用下方 override
-  subdivide: 1                # 每 N 拍切一次(1=每拍,2=隔拍)
-  override_seconds: []        # 手动卡点时间戳(秒),非空则覆盖自动结果
-  include_start_end: true     # 用 0 和音频结尾把首尾补成完整段
+  detect: auto
+  subdivide: 1
+  override_seconds: []
+  include_start_end: true
 
-# 每个节拍段的映射:背景素材、衣服参考图、光照目标。
-# 段数 = 卡点数;person_a/person_b 分别对应两位舞者的衣服参考图。
+# EDL:每个节拍段(段数=卡点数,按需补全)。background_clip 引用 backgrounds 里的子片段。
 segments:
   - id: 0
-    background: backgrounds/clip_01.mp4   # 该段背景素材(相对 backgrounds_dir)
-    bg_trim: [0.0, null]                  # 取素材的 [起, 止] 秒(null=自动按段长)
-    garment_a: garments/a_outfit_01.png
-    garment_b: garments/b_outfit_01.png
-    light:
-      direction: auto         # auto=从背景估计;或如 [azimuth_deg, elevation_deg]
-      color_temp: auto        # auto 或开尔文值,如 5600
-      intensity: auto
-
+    background_clip: meadow_a
+    ground: as_is               # as_is | generate(补地面) | virtual_plane
+    garments: { p1: cloth1 }    # 按人换装;省略某人=不换
+    light: { direction: auto, color_temp: auto, intensity: auto }
   # - id: 1
-  #   background: backgrounds/clip_02.mp4
-  #   ...
+  #   background_clip: meadow_b
+  #   ground: as_is
+  #   garments: { p1: cloth2 }
+  # - id: 2
+  #   background_clip: night_a
+  #   ground: virtual_plane
+  #   garments: { p0: cloth1, p1: cloth2 }
 
-# S3 抠像
-segment:
-  method: median              # median=时序中值背景差分(离线可用) | sam2=SAM2(需权重)
-  diff_thresh: 28             # median 法的前景差分阈值(越小越敏感)
+camera:
+  mode: auto                    # auto | locked | motion_2d | motion_3d
+  overscan: 0.12
 
-# S6 重打光回退(IC-Light 不可用时)
+segment:                        # matte 参数
+  method: sam2                  # sam2(真抠像) | median(合成测试用)
+  diff_thresh: 28
+
 relight:
-  fallback: soft_match        # passthrough=原样 | soft_match=轻量向背景环境色偏移
+  fallback: soft_match          # passthrough | soft_match
   soft_strength: 0.25
 
 compositing:
   light_wrap: true
-  light_wrap_amount: 0.5      # 背景光包裹强度
-  light_wrap_width: 4         # 包裹内缘带宽(像素)
+  light_wrap_amount: 0.5
+  light_wrap_width: 4
   contact_shadow: true
-  shadow_strength: 0.45       # 接触阴影浓度
-  shadow_blur: 9              # 阴影羽化
+  shadow_strength: 0.45
+  shadow_blur: 9
   grain: true
-  grain_sigma: 3.0            # 颗粒强度
-  match_color: true           # 主体层向背景层统一调色
+  grain_sigma: 3.0
+  match_color: true
   match_strength: 0.25
-  bg_blur: 0                  # 背景虚化(景深);0=关,>0 为模糊核档位
-  feather_px: 2               # 抠像边缘羽化
+  bg_blur: 0
+  feather_px: 2
 
 models:
   sam2: models/sam2
@@ -80,5 +105,9 @@ models:
 
 runtime:
   device: cuda
-  low_vram: true              # 开启 cpu offload / attention slicing
-  infer_scale: 1.0            # <1 降分辨率推理后上采样(省显存)
+  low_vram: true
+  infer_scale: 1.0
+
+webui:
+  host: 127.0.0.1
+  port: 8800
