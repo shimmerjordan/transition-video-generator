@@ -44,13 +44,22 @@ def restore_segment_frames(work_root: str, sid: int, overscan: float,
 
     frames = [video.imread(p) for p in names]
     h, w = frames[0].shape[:2]
-    # overscan 裁剪框(在锁定尺寸内居中)
+
+    # 是否有真实运镜:全部为单位阵(locked)则不贴回、不裁 overscan、不缩放 → 零拉伸变形
+    ident = np.array([[1, 0, 0], [0, 1, 0]], dtype=np.float64)
+    has_motion = any(i < len(transforms) and not np.allclose(transforms[i], ident)
+                     for i in range(len(frames)))
+    if not has_motion:
+        if (w, h) == tuple(out_size):
+            return frames  # 三脚架:像素级原样,只换了背景
+        return [cv2.resize(f, out_size) for f in frames]
+
+    # 有运镜:贴回 + center-crop overscan + 缩放到输出
     mx, my = int(w * overscan / 2), int(h * overscan / 2)
     cx0, cy0, cx1, cy1 = mx, my, w - mx, h - my
-
     restored = []
     for i, f in enumerate(frames):
-        if i < len(transforms) and not np.allclose(transforms[i], [[1, 0, 0], [0, 1, 0]]):
+        if i < len(transforms) and not np.allclose(transforms[i], ident):
             f = cv2.warpAffine(f, transforms[i].astype(np.float32), (w, h),
                                flags=cv2.INTER_LINEAR, borderMode=cv2.BORDER_REFLECT)
         crop = f[cy0:cy1, cx0:cx1]

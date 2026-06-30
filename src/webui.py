@@ -748,7 +748,7 @@ function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[]
  h+=`<div class=sub><h3>输入</h3>
   <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>
   <div class=optrow><b>抠像方式</b><input value="${(CFG.providers||{}).matte||'local'}" onchange="CFG.providers.matte=this.value" list=provlist size=12><span class=hint>local=SAM2(GPU);product:*=付费</span></div>
-  <div class=optrow><b>相机</b>${sel(['auto','locked','motion_2d'],CFG.camera.mode||'auto','CFG.camera.mode')}<span class=hint>三脚架选 locked</span></div></div>`;
+  <div class=optrow><b>相机</b>${sel(['locked','auto','motion_2d'],CFG.camera.mode||'locked','CFG.camera.mode')}<span class=hint>三脚架/固定机位选 locked(零扭曲,人物原样);有运镜才用 motion_2d</span></div></div>`;
  // 人物
  h+=`<div class=sub><h3>人物(抠像取点;在源片上单击)</h3><table><tr><th>id</th><th>名称</th><th>seed_point</th><th></th></tr>`;
  CFG.persons.forEach((p,i)=>{h+=`<tr><td><input value="${p.id||''}" onchange="CFG.persons[${i}].id=this.value" size=4></td>
@@ -830,9 +830,14 @@ async function runSteps(steps){await save();
 async function runTool(tool,name){await save();
  await fetch('/api/run_tool',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool,name})});poll();}
 
-function pickPoint(i){openPicker(CFG.input.source,'point',(x,y)=>{CFG.persons[i].seed_point=[x,y];renderAll();showTab('p2');});}
-function openPicker(file,mode,cb){_picker={file,mode,cb,pts:[]};G('pkfile').value=file||'';
- G('pkhint').textContent='单击取一个点';G('picker').style.display='block';loadPickFrame();}
+function pickPoint(i){
+ // 取点必须在「该段起始时刻」的画面上(SAM2 在每段首帧按此点起追踪);默认用第1段起始秒
+ let segs=CFG.segments||[];let t=(segs[0]&&segs[0].time)?segs[0].time[0]:2;
+ openPicker(CFG.input.source,'point',t,(x,y)=>{CFG.persons[i].seed_point=[x,y];renderAll();showTab('p2');});}
+function openPicker(file,mode,t,cb){_picker={file,mode,cb,pts:[]};G('pkfile').value=file||'';
+ if(t!=null)G('pktime').value=t;
+ G('pkhint').textContent='单击取一个点(请确认画面是该段起始时刻,人物在画面里)';
+ G('picker').style.display='block';loadPickFrame();}
 function loadPickFrame(){G('pkimg').src='/api/frame_at?file='+encodeURIComponent(G('pkfile').value)+'&t='+(G('pktime').value||0)+'&_='+Date.now();_picker.pts=[];}
 function pkClick(e){let img=e.target,r=img.getBoundingClientRect();
  let x=Math.round((e.clientX-r.left)*img.naturalWidth/r.width),y=Math.round((e.clientY-r.top)*img.naturalHeight/r.height);

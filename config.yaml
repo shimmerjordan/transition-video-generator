@@ -20,13 +20,13 @@ persons:
 - id: p0
   name: 男舞者
   seed_point:
-  - 700
-  - 300
+  - 685
+  - 330
 - id: p1
   name: 女舞者
   seed_point:
-  - 830
-  - 280
+  - 815
+  - 360
 garments:
   cloth1: cloth1.jpg
   cloth2: cloth2.jpg
@@ -95,8 +95,22 @@ segments:
     direction: auto
     color_temp: auto
     intensity: auto
+  time:
+  - 0
+  - 5
+- id: 1
+  time:
+  - 5
+  - 10
+  background_clip: meadow_b
+  ground: as_is
+  garments: {}
+  light:
+    direction: auto
+    color_temp: auto
+    intensity: auto
 camera:
-  mode: auto
+  mode: locked        # 三脚架/固定机位用 locked(零扭曲,人物原样);有运镜才用 motion_2d/auto
   overscan: 0.12
 segment:
   method: sam2
