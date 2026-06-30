@@ -106,7 +106,7 @@ segments:
     color_temp: auto
     intensity: auto
   time:
-  - 0
+  - 1
   - 5
 - id: 1
   time:
@@ -141,8 +141,9 @@ relight:
   soft_strength: 0.25
 compositing:
   defringe: true
-  defringe_band: 6
+  defringe_band: 8
   edge_erode: 1
+  edge_tighten: 0.15
   light_wrap: true
   light_wrap_amount: 0.5
   light_wrap_width: 4

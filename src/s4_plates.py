@@ -25,14 +25,16 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")
 from src import contract  # noqa: E402
 from src.utils import video  # noqa: E402
 from src.utils.config import get, load_config, resolve_path  # noqa: E402
-from src.s2_camera import stabilize, track_segment  # noqa: E402
+from src.s2_camera import motion_magnitude, stabilize, track_segment  # noqa: E402
 
 
 def fit_cover(img: np.ndarray, size: tuple[int, int]) -> np.ndarray:
     tw, th = size
     h, w = img.shape[:2]
     scale = max(tw / w, th / h)
-    r = cv2.resize(img, (int(round(w * scale)), int(round(h * scale))), interpolation=cv2.INTER_AREA)
+    # 缩小用 INTER_AREA(抗锯齿、最锐),放大用 LANCZOS4(避免发虚)
+    interp = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LANCZOS4
+    r = cv2.resize(img, (int(round(w * scale)), int(round(h * scale))), interpolation=interp)
     x0 = (r.shape[1] - tw) // 2
     y0 = (r.shape[0] - th) // 2
     return r[y0:y0 + th, x0:x0 + tw]
@@ -147,8 +149,19 @@ def clip_plate(cfg: dict, clip_id: str, n: int, size: tuple, root: str,
             raw = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in raw]
     if not raw:
         raise SystemExit(f"片段 {clip_id} 读到 0 帧")
-    transforms = track_segment(raw) if len(raw) > 1 else [None]
-    locked_bg = stabilize(raw, transforms) if len(raw) > 1 else raw
+    # 背景自身运镜:只有确有明显运动才做反稳定(warpAffine 会重采样变糊);
+    # 近静止的背景跳过稳定化以保留原始清晰度。
+    if len(raw) > 1:
+        transforms = track_segment(raw)
+        disp = motion_magnitude(transforms, (raw[0].shape[1], raw[0].shape[0]))
+        if disp < 2.5:
+            print(f"[s4] {clip_id}: 背景运镜仅 {disp:.1f}px,跳过稳定化(保清晰)")
+            locked_bg = raw
+        else:
+            print(f"[s4] {clip_id}: 背景运镜 {disp:.1f}px,做反稳定锁定")
+            locked_bg = stabilize(raw, transforms)
+    else:
+        locked_bg = raw
     if ground == "generate":
         print(f"[s4] {clip_id}: ground=generate 需生成式(provider),本地回退 as_is")
     locked_bg = [apply_ground(fit_cover(f, (w, h)), ground) for f in locked_bg]

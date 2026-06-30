@@ -90,12 +90,20 @@ def add_grain(img: np.ndarray, sigma: float) -> np.ndarray:
 
 def composite_frame(subject, plate, alpha, cfg) -> np.ndarray:
     c = get(cfg, "compositing", {}) or {}
-    # 边缘:先轻微收边(把软过渡带拉进人物内,削掉旧背景外缘),再去污染重绘边缘色
+    # 边缘:先轻微收边(把软过渡带拉进人物内,削掉旧背景外缘)
     ee = int(c.get("edge_erode", 1))
     if ee > 0:
         alpha = cv2.erode(alpha, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ee * 2 + 1, ee * 2 + 1)))
+    # 收紧半透明带:把 0/255 之间的灰边对比度拉高,减少旧背景透出形成的虚影外圈
+    et = float(c.get("edge_tighten", 0.15))
+    if et > 0:
+        lo, hi = et, 1.0 - et
+        a = (alpha.astype(np.float32) / 255.0 - lo) / max(1e-3, hi - lo)
+        alpha = np.clip(a, 0, 1)
+        alpha = (alpha * 255.0).astype(np.uint8)
+    # 去污染:用实心前景色外扩重绘边缘带,挤掉旧背景色(band 需覆盖软边宽度)
     if c.get("defringe", True):
-        subject = defringe(subject, alpha, int(c.get("defringe_band", 6)))
+        subject = defringe(subject, alpha, int(c.get("defringe_band", 8)))
     if c.get("bg_blur", 0):
         kb = int(c["bg_blur"]) * 2 + 1
         plate = cv2.GaussianBlur(plate, (kb, kb), 0)

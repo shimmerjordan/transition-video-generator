@@ -76,6 +76,24 @@ def _gpu_stats():
         return None
 
 
+def _free_gpu() -> None:
+    """任务结束后释放 GPU:卸载常驻模型 + 清空 CUDA 缓存,避免显存一直被占。"""
+    try:
+        from src.utils import matte_refine
+        matte_refine.release()
+    except Exception:
+        pass
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
 def _clean(cfg: dict) -> dict:
     return {k: v for k, v in cfg.items() if not k.startswith("_")}
 
@@ -259,6 +277,7 @@ async def run_pipeline(req: Request):
         except Exception:
             RUN["log"].append("ERROR:\n" + traceback.format_exc())
         finally:
+            _free_gpu()
             RUN["running"] = False
             RUN["progress"] = None
 
@@ -289,6 +308,7 @@ async def run_tool(req: Request):
         except Exception:
             lg("ERROR:\n" + traceback.format_exc())
         finally:
+            _free_gpu()
             RUN["running"] = False
             RUN["progress"] = None
 
@@ -368,6 +388,7 @@ async def run_swap(req: Request):
         except Exception:
             lg("ERROR:\n" + traceback.format_exc())
         finally:
+            _free_gpu()
             RUN["running"] = False
             RUN["progress"] = None
 
@@ -783,9 +804,8 @@ function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[]
  let h=`<h2>4 · 换背景</h2><p class=phasehint>**整段视频一次性连续抠像**(人物只框选一次,焦点不丢)→ 背景**按时间线切换**。流程:连续抠像(SAM2+细化)→ 按时间线拼背景 → 合成出片。背景建议先在「去水印/裁剪」处理干净。边缘虚影由合成阶段「去边缘虚影」处理,软边可开 matanyone。</p>`;
  // 输入
  h+=`<div class=sub><h3>输入</h3>
-  <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>`;
- if(inp.source)h+=`<div class=optrow style=align-items:flex-start><b>播放片源</b><video controls preload=metadata style="max-width:460px;border-radius:8px;border:1px solid var(--line)" src="/api/media?file=${encodeURIComponent(inp.source)}"></video></div>`;
- h+=`<div class=optrow><b>起始抠像</b><input type=number step=0.1 value="${CFG.segment.matte_start!=null?CFG.segment.matte_start:r1(mstart)}" onchange="CFG.segment.matte_start=+this.value;renderAll();showTab('p2')" style=width:80px><span class=hint>从源片此刻(秒)开始连续抠像,并在此帧框选人物;应 ≤ 最早分段起点。留空=自动取最早分段起点</span></div>
+  <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>
+  <div class=optrow><b>起始抠像</b><input type=number step=0.1 value="${CFG.segment.matte_start!=null?CFG.segment.matte_start:r1(mstart)}" onchange="CFG.segment.matte_start=+this.value;renderAll();showTab('p2')" style=width:80px><span class=hint>从源片此刻(秒)开始连续抠像,并在此帧框选人物;应 ≤ 最早分段起点。留空=自动取最早分段起点</span></div>
   <div class=optrow><b>抠像方式</b><input value="${(CFG.providers||{}).matte||'local'}" onchange="CFG.providers.matte=this.value" list=provlist size=12><span class=hint>local=SAM2(GPU);product:*=付费</span></div>
   <div class=optrow><b>SAM2 模型</b>${sel(['small','base_plus','large'],CFG.segment.sam2_model||'large','CFG.segment.sam2_model')}<span class=hint>large 质量最好</span></div>
   <div class=optrow><b>软边细化</b>${sel(['none','matanyone'],CFG.segment.refine||'none','CFG.segment.refine')}<span class=hint>matanyone=发丝/裙摆软边(GPU,更慢,显著减虚影)</span></div>
@@ -815,9 +835,9 @@ function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[]
    <td><button class=alt onclick="CFG.segments.splice(${i},1);renderAll();showTab('p2')">删</button></td></tr>`;});
  h+=`</table><button onclick="bgSwapAddSeg()">+ 段</button></div>`;
  // 预览
- let pv=inp.source?`/api/frame_at?file=${encodeURIComponent(inp.source)}&t=${_spanStart()}&_=${Date.now()}`:'';
+ let srcv=inp.source?`/api/media?file=${encodeURIComponent(inp.source)}`:'';
  h+=`<div class=sub><h3>预览</h3><div class=mediarow>
-   <div><div class=medialbl>源片(跨度起始,框选参考)</div><img class=media src="${pv}"></div>
+   <div><div class=medialbl>源片(可播放;框选参考帧见上方「起始抠像」)</div><video class=media controls preload=metadata src="${srcv}"></video></div>
    <div><div class=medialbl>成片(运行后)</div><video class=media controls src="/api/final?_=${Date.now()}"></video></div></div></div>`;
  // 运行
  h+=`<div class=row><button class=go onclick="runSwap()">▶ 运行换背景(整段)</button><span class=hint>整段一次抠像 + 背景按时间线切换;右侧看 GPU/进度</span></div>`;
@@ -853,8 +873,8 @@ function secRelight(){let r=CFG.relight=CFG.relight||{};return `<div class=sub><
  <p class=hint>真实重打光建议 provider=product 或本地接 IC-Light。</p></div>`;}
 function secComposite(){let c=CFG.compositing=CFG.compositing||{};let cb=(k,v)=>`<input type=checkbox ${v?'checked':''} onchange="CFG.compositing['${k}']=this.checked">`;
  return `<h2>5 · 细节 / 出片</h2><p class=phasehint>调真实感细节后合成出片。</p><div class=sub>
- <div class=row><label>去边缘虚影</label>${cb('defringe',c.defringe!==false)} 外扩${num(c.defringe_band??6,'CFG.compositing.defringe_band')}px 收边${num(c.edge_erode??1,'CFG.compositing.edge_erode')}px
-  <span class=hint>消除人物边缘的旧背景光晕/虚影:用实心前景色重绘边缘带并轻微收边</span></div>
+ <div class=row><label>去边缘虚影</label>${cb('defringe',c.defringe!==false)} 外扩${num(c.defringe_band??8,'CFG.compositing.defringe_band')}px 收边${num(c.edge_erode??1,'CFG.compositing.edge_erode')}px 收紧${num(c.edge_tighten??0.15,'CFG.compositing.edge_tighten')}
+  <span class=hint>消除人物边缘的旧背景光晕/虚影:用实心前景色重绘边缘带(外扩)+ 收边 + 收紧半透明带(0~0.4,越大边越硬)</span></div>
  <div class=row><label>光包裹</label>${cb('light_wrap',c.light_wrap!==false)} 强度${num(c.light_wrap_amount??0.5,'CFG.compositing.light_wrap_amount')}</div>
  <div class=row><label>接触阴影</label>${cb('contact_shadow',c.contact_shadow!==false)} 浓度${num(c.shadow_strength??0.45,'CFG.compositing.shadow_strength')}</div>
  <div class=row><label>颗粒</label>${cb('grain',c.grain!==false)} 强度${num(c.grain_sigma??3.0,'CFG.compositing.grain_sigma')}</div>

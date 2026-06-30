@@ -43,6 +43,22 @@ def _load():
     return _MODEL
 
 
+def release() -> None:
+    """卸载常驻 GPU 的 MatAnyone 模型并清空 CUDA 缓存(出片后释放显存)。"""
+    global _MODEL, _READY
+    _MODEL = None
+    _READY = False
+    try:
+        import gc
+        import torch
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+    except Exception:
+        pass
+
+
 def refine_person(frames_bgr: list[np.ndarray], mask0: np.ndarray,
                   r_erode: int = 10, r_dilate: int = 10, n_warmup: int = 10) -> list[np.ndarray]:
     """frames_bgr: BGR 帧序列;mask0: 首帧二值 mask(HxW uint8)。返回每帧软 alpha(HxW uint8)。"""
