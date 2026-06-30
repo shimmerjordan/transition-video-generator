@@ -132,11 +132,24 @@ def matte_sam2(cfg: dict, frames: list[np.ndarray], persons: list[dict],
         import shutil
         shutil.rmtree(tmp, ignore_errors=True)
 
+    # 可选:MatAnyone 用 SAM2 首帧 mask 细化出发丝级软边 alpha(裙摆/头发)
+    refine = get(cfg, "segment.refine", "none") == "matanyone"
+    if refine:
+        from src.utils import matte_refine
+        if not matte_refine.available():
+            print("[s3][告警] MatAnyone 未就绪(缺 models/matanyone[_code]),跳过细化")
+            refine = False
+
     per_person: dict[str, list[np.ndarray]] = {}
     union = [np.zeros((h, w), np.uint8) for _ in frames]
     for k, pid in valid:
-        seq = [(_feather(m, feather) if m is not None else np.zeros((h, w), np.uint8))
-               for m in per_obj[k]]
+        first = next((m for m in per_obj[k] if m is not None), None)
+        if refine and first is not None:
+            print(f"[s3] MatAnyone 细化 {pid} …")
+            seq = matte_refine.refine_person(frames, first)
+        else:
+            seq = [(_feather(m, feather) if m is not None else np.zeros((h, w), np.uint8))
+                   for m in per_obj[k]]
         per_person[pid] = seq
         for i, m in enumerate(seq):
             union[i] = np.maximum(union[i], m)

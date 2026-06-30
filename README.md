@@ -56,6 +56,12 @@ HF_ENDPOINT=https://hf-mirror.com .venv/Scripts/python -c "from huggingface_hub 
 ```
 
 `config.models.sam2` 指向 `.pt`,`segment.method: sam2`。在「换背景」页给每个人物**取点**(`seed_point`)即可,SAM2 会按人输出 alpha 并做时序追踪。
+`segment.sam2_model` 可选 small/base_plus/**large**(默认,质量最好)。
+
+### 软边细化(MatAnyone,可选)
+
+`segment.refine: matanyone` → 用 SAM2 首帧 mask 作目标,MatAnyone 逐帧传播出**发丝/裙摆级软边 alpha**(GPU,更慢)。
+代码与权重来自 HF `PeiqingYang/MatAnyone`(经 hf-mirror 下到 `models/matanyone[_code]`),依赖 `pip install imageio`。
 
 ### GPU 去水印(LaMa,推荐)
 

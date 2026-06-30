@@ -748,7 +748,8 @@ function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[]
  h+=`<div class=sub><h3>输入</h3>
   <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>
   <div class=optrow><b>抠像方式</b><input value="${(CFG.providers||{}).matte||'local'}" onchange="CFG.providers.matte=this.value" list=provlist size=12><span class=hint>local=SAM2(GPU);product:*=付费</span></div>
-  <div class=optrow><b>SAM2 模型</b>${sel(['small','base_plus','large'],(CFG.segment=CFG.segment||{}).sam2_model||'large','CFG.segment.sam2_model')}<span class=hint>large 质量最好(显存/时间略多)</span></div>
+  <div class=optrow><b>SAM2 模型</b>${sel(['small','base_plus','large'],(CFG.segment=CFG.segment||{}).sam2_model||'large','CFG.segment.sam2_model')}<span class=hint>large 质量最好</span></div>
+  <div class=optrow><b>软边细化</b>${sel(['none','matanyone'],CFG.segment.refine||'none','CFG.segment.refine')}<span class=hint>matanyone=发丝/裙摆软边(GPU,更慢)</span></div>
   <div class=optrow><b>相机</b>${sel(['locked','auto','motion_2d'],CFG.camera.mode||'locked','CFG.camera.mode')}<span class=hint>三脚架/固定机位选 locked(零扭曲,人物原样);有运镜才用 motion_2d</span></div></div>`;
  // 人物
  h+=`<div class=sub><h3>人物(抠像取点;在源片上单击)</h3><table><tr><th>id</th><th>名称</th><th>seed_point</th><th></th></tr>`;
