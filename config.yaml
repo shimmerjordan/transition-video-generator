@@ -110,10 +110,11 @@ segments:
     color_temp: auto
     intensity: auto
 camera:
-  mode: locked        # 三脚架/固定机位用 locked(零扭曲,人物原样);有运镜才用 motion_2d/auto
+  mode: locked
   overscan: 0.12
 segment:
   method: sam2
+  sam2_model: large
   diff_thresh: 28
 dewatermark:
   engine: lama

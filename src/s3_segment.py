@@ -63,16 +63,29 @@ def matte_median(frames: list[np.ndarray], thresh: int, feather: int) -> list[np
 
 # ---------------- SAM2(GPU 真抠像)----------------
 
+SAM2_MODELS = {
+    "small":     ("models/sam2/sam2.1_hiera_small.pt",      "configs/sam2.1/sam2.1_hiera_s.yaml"),
+    "base_plus": ("models/sam2/sam2.1_hiera_base_plus.pt",  "configs/sam2.1/sam2.1_hiera_b+.yaml"),
+    "large":     ("models/sam2/sam2.1_hiera_large.pt",      "configs/sam2.1/sam2.1_hiera_l.yaml"),
+}
+
+
 def _sam2_predictor(cfg: dict):
-    """构建 SAM2 视频预测器。返回 (predictor, device)。"""
+    """构建 SAM2 视频预测器。优先用 segment.sam2_model(small/base_plus/large),否则用 models.sam2 路径。"""
     import torch
     from sam2.build_sam import build_sam2_video_predictor
 
-    ckpt = resolve_path(cfg, get(cfg, "models.sam2", "models/sam2/sam2.1_hiera_small.pt"))
-    cfg_name = get(cfg, "models.sam2_cfg", "configs/sam2.1/sam2.1_hiera_s.yaml")
+    name = get(cfg, "segment.sam2_model")
+    if name in SAM2_MODELS:
+        ckpt_rel, cfg_name = SAM2_MODELS[name]
+        ckpt = resolve_path(cfg, ckpt_rel)
+    else:
+        ckpt = resolve_path(cfg, get(cfg, "models.sam2", "models/sam2/sam2.1_hiera_small.pt"))
+        cfg_name = get(cfg, "models.sam2_cfg", "configs/sam2.1/sam2.1_hiera_s.yaml")
     if not os.path.isfile(ckpt):
         raise FileNotFoundError(f"SAM2 权重缺失:{ckpt}(见 README 下载)")
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[s3] SAM2 模型:{name or os.path.basename(ckpt)}")
     predictor = build_sam2_video_predictor(cfg_name, ckpt, device=device)
     return predictor, device
 
