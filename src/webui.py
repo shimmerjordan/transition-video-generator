@@ -574,7 +574,7 @@ function secWatermark(){let names=Object.keys(CFG.backgrounds||{});
   <div class=opts>
    <div class=optrow><b>背景</b>${selFn(names,WMV.name,'wmSetVideo')}</div>
    <div class=optrow><b>去水印工具</b><input value="${(CFG.providers||{}).cleanup||'local'}" onchange="CFG.providers.cleanup=this.value" list=provlist size=12></div>
-   <div class=optrow><b>修复引擎</b>${sel(['cv2','sd'],d.engine||'cv2','CFG.dewatermark.engine')}<span class=hint>cv2=快 / sd=GPU扩散(质量好慢)</span></div>
+   <div class=optrow><b>修复引擎</b>${sel(['cv2','sd'],d.engine||'cv2','CFG.dewatermark.engine')}<span class=hint>cv2=快/可靠(小logo);sd=GPU扩散(实验性,文字附近可能幻觉)</span></div>
    <div class=optrow><b>SD步数</b><input type=number value="${d.steps||25}" onchange="CFG.dewatermark.steps=+this.value" size=4 style=width:60px></div>
   </div>
   <div class=row>时间 <input type=range id=wmt min=0 max=${Math.max(1,Math.floor(dur))} step=0.1 value=${WMV.t} oninput="WMV.t=+this.value;wmScrub()" style=flex:1> <span id=wmtl>${WMV.t}</span>s

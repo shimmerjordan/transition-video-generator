@@ -189,7 +189,12 @@ def _sd_pipe(cfg: dict):
         from diffusers import AutoPipelineForInpainting
         model = get(cfg, "dewatermark.model", "Lykon/dreamshaper-8-inpainting")
         os.environ.setdefault("HF_ENDPOINT", "https://hf-mirror.com")
-        pipe = AutoPipelineForInpainting.from_pretrained(model, torch_dtype=torch.float16)
+        try:
+            pipe = AutoPipelineForInpainting.from_pretrained(
+                model, torch_dtype=torch.float16, variant="fp16", safety_checker=None)
+        except Exception:
+            pipe = AutoPipelineForInpainting.from_pretrained(
+                model, torch_dtype=torch.float16, safety_checker=None)
         pipe = pipe.to("cuda")
         pipe.set_progress_bar_config(disable=True)
         try:
@@ -202,9 +207,10 @@ def _sd_pipe(cfg: dict):
 
 def _sd_inpaint_pass(cfg, name, src, out, cleanup, root, log, progress) -> str:
     """逐帧 SD 扩散修复(GPU):每个生效矩形单独裁剪→修复→贴回。质量好、慢、吃 GPU。"""
-    import torch  # noqa
+    import torch
     from PIL import Image
     pipe = _sd_pipe(cfg)
+    seed = int(get(cfg, "dewatermark.seed", 0))
     S = int(get(cfg, "dewatermark.size", 512))
     steps = int(get(cfg, "dewatermark.steps", 25))
     gs = float(get(cfg, "dewatermark.guidance", 8))
@@ -228,10 +234,12 @@ def _sd_inpaint_pass(cfg, name, src, out, cleanup, root, log, progress) -> str:
                 crop = fr[by0:by1, bx0:bx1].copy()
                 m = np.zeros(crop.shape[:2], np.uint8)
                 cv2.rectangle(m, (x0 - bx0, y0 - by0), (x1 - bx0, y1 - by0), 255, -1)
+                m = cv2.dilate(m, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (21, 21)))
                 ci = Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)).resize((S, S))
                 mi = Image.fromarray(m).resize((S, S))
+                gen = torch.Generator("cuda").manual_seed(seed)  # 固定噪声→减少逐帧抖动
                 res = pipe(prompt=prompt, negative_prompt=neg, image=ci, mask_image=mi,
-                           num_inference_steps=steps, guidance_scale=gs).images[0]
+                           num_inference_steps=steps, guidance_scale=gs, generator=gen).images[0]
                 res = cv2.cvtColor(np.array(res.resize((bx1 - bx0, by1 - by0))), cv2.COLOR_RGB2BGR)
                 mm = (cv2.resize(m, (bx1 - bx0, by1 - by0)) > 127)[..., None]
                 fr[by0:by1, bx0:bx1] = np.where(mm, res, crop)

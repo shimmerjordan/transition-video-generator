@@ -97,8 +97,8 @@ dewatermark:
   size: 512
   steps: 25
   guidance: 8
-  prompt: clean background, seamless, photorealistic
-  negative: text, watermark, logo, letters, characters, words
+  prompt: clean background, seamless, photorealistic, empty
+  negative: text, letters, words, watermark, logo, characters, signature, writing, symbols, numbers
 relight:
   fallback: soft_match
   soft_strength: 0.25
