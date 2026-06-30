@@ -15,11 +15,16 @@ uvicorn[standard]
 psutil                 # 资源监控:CPU/内存
 nvidia-ml-py           # 资源监控:GPU util/显存(pynvml)
 
-# --- GPU 扩散去水印(可选,dewatermark.engine=sd)---
+# --- GPU 去水印 LaMa(推荐,dewatermark.engine=lama)---
+# simple-lama-inpainting 旧 Pillow pin 在 py3.13 编译失败,用 --no-deps 装:
+#   pip install --no-deps simple-lama-inpainting
+# 首次用自动从 GitHub release 下 big-lama.pt(~200MB,需可直连 github)
+simple-lama-inpainting
+
+# --- GPU 扩散去水印(可选,dewatermark.engine=sd;实验性,文字附近可能幻觉)---
 diffusers
 transformers
 accelerate
-# 模型经 HF 镜像下载:Lykon/dreamshaper-8-inpainting(或 SDXL inpaint)
 
 # --- S3 抠像(SAM2,GPU,已接入)---
 # torch/torchvision 需按显卡装 CUDA 版(不要用默认 CPU 版):

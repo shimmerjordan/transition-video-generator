@@ -90,9 +90,9 @@ camera:
 segment:
   method: sam2
   diff_thresh: 28
-# 去水印引擎:cv2(快,本地CPU)| sd(GPU 扩散修复,质量好、慢、吃显存)
+# 去水印引擎:lama(GPU,质量最好、无幻觉,推荐)| cv2(快,小logo)| sd(GPU扩散,实验性)
 dewatermark:
-  engine: cv2
+  engine: lama
   model: Lykon/dreamshaper-8-inpainting
   size: 512
   steps: 25

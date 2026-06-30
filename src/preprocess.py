@@ -112,7 +112,10 @@ def dewatermark_bg(cfg: dict, name: str, root: str, log=print, progress=None) ->
         shutil.copyfile(src, out)
         return out
 
-    if get(cfg, "dewatermark.engine", "cv2") == "sd":
+    engine = get(cfg, "dewatermark.engine", "cv2")
+    if engine == "lama":
+        return _lama_pass(cfg, name, src, out, cleanup, root, log, progress)
+    if engine == "sd":
         return _sd_inpaint_pass(cfg, name, src, out, cleanup, root, log, progress)
 
     info = video.video_info(src)
@@ -176,6 +179,58 @@ def make_clips(cfg: dict, name: str, root: str, log=print) -> list[str]:
         log(f"[裁剪] {cid}: {rng} ({used}) → {out}")
     log(f"[裁剪] {name}: 生成 {len(outs)} 个片段")
     return outs
+
+
+_LAMA = None
+
+
+def _lama_model():
+    global _LAMA
+    if _LAMA is None:
+        from simple_lama_inpainting import SimpleLama
+        _LAMA = SimpleLama()
+    return _LAMA
+
+
+def _lama_pass(cfg, name, src, out, cleanup, root, log, progress) -> str:
+    """逐帧 LaMa 修复(GPU):按时刻生效矩形,裁包围盒→LaMa 修复→贴回。无幻觉、质量好。"""
+    from PIL import Image
+    lama = _lama_model()
+    info = video.video_info(src)
+    fps, w, h = info["fps"] or get(cfg, "project.fps", 30), info["width"], info["height"]
+    total = info["count"] or 0
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 15))
+    log(f"[去水印·LaMa] {name}: GPU,共 {total} 帧…")
+    n = 0
+    with video.FrameWriter(out, fps, (w, h)) as wr:
+        for fr in video.read_frames(src):
+            rects = active_rects(cleanup, n / fps)
+            if rects:
+                m = np.zeros((h, w), np.uint8)
+                for x0, y0, x1, y1 in rects:
+                    cv2.rectangle(m, (x0, y0), (x1, y1), 255, -1)
+                m = cv2.dilate(m, kernel)
+                ys, xs = np.where(m > 0)
+                pad = 40
+                bx0, bx1 = max(0, xs.min() - pad), min(w, xs.max() + pad + 1)
+                by0, by1 = max(0, ys.min() - pad), min(h, ys.max() + pad + 1)
+                crop = fr[by0:by1, bx0:bx1]
+                cm = m[by0:by1, bx0:bx1]
+                res = lama(Image.fromarray(cv2.cvtColor(crop, cv2.COLOR_BGR2RGB)),
+                           Image.fromarray(cm))
+                res = cv2.cvtColor(np.array(res), cv2.COLOR_RGB2BGR)
+                if res.shape[:2] != crop.shape[:2]:
+                    res = cv2.resize(res, (crop.shape[1], crop.shape[0]))
+                mm = (cm > 127)[..., None]
+                fr[by0:by1, bx0:bx1] = np.where(mm, res, crop)
+            wr.write(fr)
+            n += 1
+            if progress and total:
+                progress(n / total)
+            if n % 50 == 0:
+                log(f"[去水印·LaMa] {name}: {n}/{total} 帧…")
+    log(f"[去水印·LaMa] {name}: 完成 {n} 帧 → {out}")
+    return out
 
 
 _SD_PIPE = None
