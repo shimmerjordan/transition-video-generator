@@ -760,10 +760,14 @@ function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[]
   <td><button class=alt onclick="CFG.persons.splice(${i},1);renderAll();showTab('p2')">删</button></td></tr>`;});
  h+=`</table><button onclick="CFG.persons.push({id:'p'+CFG.persons.length,name:'',seed_point:[0,0]});renderAll();showTab('p2')">+ 人物</button></div>`;
  // 分段:时间→背景→地面
- h+=`<div class=sub><h3>分段(时间段 → 背景)</h3><table><tr><th>段</th><th>起s</th><th>止s</th><th>背景</th><th>地面</th><th></th></tr>`;
+ h+=`<div class=sub><h3>分段(时间段 → 背景)</h3>
+   <p class=hint>⚠ 每段缩略图就是该时刻源片画面——确认这段里有舞者(片头/字幕段没有人,换背景后会"丢失")。点缩略图按起始秒刷新。</p>
+   <table><tr><th>段</th><th>该段画面(起始)</th><th>起s</th><th>止s</th><th>背景</th><th>地面</th><th></th></tr>`;
  CFG.segments.forEach((s,i)=>{if(!s.time)s.time=[0,Math.min(sdur||5,5)];
+  let th=inp.source?`/api/frame_at?file=${encodeURIComponent(inp.source)}&t=${s.time[0]}&_=${Date.now()}`:'';
   h+=`<tr><td>${s.id}</td>
-   <td><input type=number value="${s.time[0]}" onchange="CFG.segments[${i}].time[0]=+this.value" style=width:64px></td>
+   <td><img src="${th}" style="height:64px;border:1px solid var(--line);border-radius:4px" title="${s.time[0]}s"></td>
+   <td><input type=number value="${s.time[0]}" onchange="CFG.segments[${i}].time[0]=+this.value;renderAll();showTab('p2')" style=width:64px></td>
    <td><input type=number value="${s.time[1]}" onchange="CFG.segments[${i}].time[1]=+this.value" style=width:64px></td>
    <td>${sel(clips,s.background_clip||'',`CFG.segments[${i}].background_clip`)}</td>
    <td>${sel(['as_is','generate','virtual_plane'],s.ground||'as_is',`CFG.segments[${i}].ground`)}</td>

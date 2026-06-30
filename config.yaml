@@ -115,7 +115,7 @@ camera:
 segment:
   method: sam2
   sam2_model: large
-  refine: matanyone     # none | matanyone(用 SAM2 首帧 mask 出发丝级软边,GPU)
+  refine: matanyone
   diff_thresh: 28
 dewatermark:
   engine: lama

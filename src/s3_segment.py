@@ -194,6 +194,8 @@ def process_segment(cfg: dict, sid: int, work_root: str, method: str) -> dict:
     cov = float(np.mean([a.mean() / 255.0 for a in union])) if union else 0.0
     who = ",".join(per_person.keys()) or "(无 per-person)"
     print(f"[s3] 段 {sid}: {len(union)} 帧 alpha → {out_dir}({used};覆盖 {cov:.1%};人物 {who})")
+    if cov < 0.005:
+        print(f"[s3][告警] 段 {sid} 主体覆盖极低({cov:.2%})——seed 点可能没点到人,或该时间段没有主体(如片头/字幕)。请在「换背景」页确认该段缩略图里有舞者并重新取点。")
     return {"segment": sid, "frames": len(union), "alpha_dir": out_dir,
             "coverage": cov, "method": used, "persons": list(per_person.keys())}
 
