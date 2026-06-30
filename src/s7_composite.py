@@ -26,6 +26,24 @@ from src.utils import video  # noqa: E402
 from src.utils.config import get, load_config, resolve_path  # noqa: E402
 
 
+def defringe(subject: np.ndarray, alpha: np.ndarray, band: int,
+             core_thr: int = 200) -> np.ndarray:
+    """边缘去污染:半透明边缘带的 RGB 仍带着原视频的旧背景色,叠到新背景会形成虚影/光晕。
+    把边缘带(实心前景之外的一圈)用实心前景色外扩重绘,再用软 alpha 混合 → 边缘只剩人物色渐隐。"""
+    if band <= 0:
+        return subject
+    core = (alpha >= core_thr).astype(np.uint8)
+    if int(core.sum()) < 10:
+        return subject
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (band * 2 + 1, band * 2 + 1))
+    grown = cv2.dilate(core, k)
+    fill = (((grown > 0) & (core == 0)).astype(np.uint8)) * 255   # 待重绘的边缘环
+    if int(fill.sum()) == 0:
+        return subject
+    # inpaint 只用未遮罩区域(=实心前景)外推,从而把前景色"长"进边缘环,挤掉旧背景色
+    return cv2.inpaint(subject, fill, 3, cv2.INPAINT_TELEA)
+
+
 def color_match(subject: np.ndarray, plate: np.ndarray, alpha: np.ndarray,
                 strength: float) -> np.ndarray:
     """把主体区域的均值向背景均值靠拢(温和)。"""
@@ -72,6 +90,12 @@ def add_grain(img: np.ndarray, sigma: float) -> np.ndarray:
 
 def composite_frame(subject, plate, alpha, cfg) -> np.ndarray:
     c = get(cfg, "compositing", {}) or {}
+    # 边缘:先轻微收边(把软过渡带拉进人物内,削掉旧背景外缘),再去污染重绘边缘色
+    ee = int(c.get("edge_erode", 1))
+    if ee > 0:
+        alpha = cv2.erode(alpha, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (ee * 2 + 1, ee * 2 + 1)))
+    if c.get("defringe", True):
+        subject = defringe(subject, alpha, int(c.get("defringe_band", 6)))
     if c.get("bg_blur", 0):
         kb = int(c["bg_blur"]) * 2 + 1
         plate = cv2.GaussianBlur(plate, (kb, kb), 0)

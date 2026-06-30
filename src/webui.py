@@ -302,12 +302,22 @@ def run_log():
 
 
 def _span_of(cfg: dict) -> tuple[float, float]:
-    """整段连续抠像的范围 = 覆盖所有背景分段时间的并集 [min起, max止]。"""
+    """整段连续抠像的范围 = 覆盖所有背景分段时间的并集 [min起, max止]。
+    若设置了 segment.matte_start,则以它作为起始抠像时刻(SAM2 在此帧框选人物并向后追踪)。"""
     times = [s.get("time") for s in get(cfg, "segments", []) or [] if s.get("time")]
     times = [t for t in times if t and len(t) >= 2 and float(t[1]) > float(t[0])]
     if not times:
         return (0.0, 0.0)
-    return (min(float(t[0]) for t in times), max(float(t[1]) for t in times))
+    start, end = min(float(t[0]) for t in times), max(float(t[1]) for t in times)
+    ms = get(cfg, "segment.matte_start", None)
+    if ms not in (None, ""):
+        try:
+            ms = float(ms)
+            if 0 <= ms < end:
+                start = ms
+        except (TypeError, ValueError):
+            pass
+    return (start, end)
 
 
 def _build_span_beats(cfg: dict, span: tuple, log) -> int:
@@ -388,6 +398,18 @@ def video_file(path: str):
     if not full.startswith(base) or not os.path.isfile(full):
         return JSONResponse({"error": "not found"}, status_code=404)
     return FileResponse(full, media_type="video/mp4")
+
+
+@app.get("/api/media")
+def media_file(file: str):
+    """按素材名/路径解析并整段返回(源片在 data 外也可播放;FileResponse 自带 Range 支持)。"""
+    cfg = load_config(CONFIG_PATH)
+    path = _resolve_media(cfg, file)
+    if not path:
+        return JSONResponse({"error": f"找不到 {file}"}, status_code=404)
+    ext = os.path.splitext(path)[1].lower()
+    mt = "video/mp4" if ext in VID_EXT else "image/jpeg"
+    return FileResponse(path, media_type=mt)
 
 
 @app.get("/api/final")
@@ -523,7 +545,10 @@ const TABS=[['wm','1·去水印'],['clip','2·裁剪分段'],['p1','3·时间线
 
 function buildNav(){G('nav').innerHTML=TABS.map(([k,n])=>`<button id=nav_${k} onclick=showTab('${k}')>${n}</button>`).join('');}
 function showTab(k){TABS.forEach(([t])=>{G('t_'+t).classList.toggle('on',t==k);G('nav_'+t).classList.toggle('on',t==k);});
+ if(location.hash!=='#'+k)location.hash=k;   // 写入 URL,刷新后停留在当前步骤
  if(k=='adv')loadRaw();if(k=='wm')wmInit();}
+window.addEventListener('hashchange',()=>{let k=location.hash.replace(/^#/,'');
+ if(k&&TABS.some(t=>t[0]==k))showTab(k);});
 function msg(s){G('msg').textContent=s;setTimeout(()=>G('msg').textContent='',4000);}
 function sel(opts,val,bind){return `<select onchange="${bind}=this.value">`+
  opts.map(o=>`<option ${o==val?'selected':''}>${o}</option>`).join('')+`</select>`;}
@@ -540,8 +565,9 @@ function durOf(name){let f=(CFG.backgrounds[name]||{}).file;let v=ASSETS.videos.
 async function boot(){buildNav();
  CFG=await (await fetch('/api/config.json')).json();
  ASSETS=await (await fetch('/api/assets')).json();
- renderAll();showTab('wm');setInterval(()=>{if(G('runflag').textContent.includes('运行'))poll();},2500);
- refresh();pollRes();setInterval(pollRes,1500);}
+ let init=location.hash.replace(/^#/,'');if(!TABS.some(t=>t[0]==init))init='wm';
+ renderAll();showTab(init);
+ refresh();poll();pollRes();setInterval(pollRes,1500);}
 function renderAll(){
  G('t_clip').innerHTML=secInputs()+secClips();
  G('t_wm').innerHTML=secWatermark();
@@ -752,14 +778,17 @@ function applyTimeline(){let cuts=[...(CFG.beats.override_seconds||[])].sort((x,
 function _srcDur(){let inp=CFG.input||{};let name=(inp.source||'').split('/').pop();
  return (ASSETS.videos.find(v=>v.name===name)||{}).duration||0;}
 function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[];CFG.segments=CFG.segments||[];
- CFG.camera=CFG.camera||{};let clips=['',...allClipIds()];let sdur=_srcDur();
- let h=`<h2>4 · 换背景</h2><p class=phasehint>**整段视频一次性连续抠像**(人物只框选一次,焦点不丢)→ 背景**按时间线切换**。流程:连续抠像(SAM2+细化)→ 按时间线拼背景 → 合成出片。背景建议先在「去水印/裁剪」处理干净。</p>`;
+ CFG.camera=CFG.camera||{};CFG.segment=CFG.segment||{};let clips=['',...allClipIds()];let sdur=_srcDur();
+ let mstart=_spanStart();
+ let h=`<h2>4 · 换背景</h2><p class=phasehint>**整段视频一次性连续抠像**(人物只框选一次,焦点不丢)→ 背景**按时间线切换**。流程:连续抠像(SAM2+细化)→ 按时间线拼背景 → 合成出片。背景建议先在「去水印/裁剪」处理干净。边缘虚影由合成阶段「去边缘虚影」处理,软边可开 matanyone。</p>`;
  // 输入
  h+=`<div class=sub><h3>输入</h3>
-  <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>
+  <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>`;
+ if(inp.source)h+=`<div class=optrow style=align-items:flex-start><b>播放片源</b><video controls preload=metadata style="max-width:460px;border-radius:8px;border:1px solid var(--line)" src="/api/media?file=${encodeURIComponent(inp.source)}"></video></div>`;
+ h+=`<div class=optrow><b>起始抠像</b><input type=number step=0.1 value="${CFG.segment.matte_start!=null?CFG.segment.matte_start:r1(mstart)}" onchange="CFG.segment.matte_start=+this.value;renderAll();showTab('p2')" style=width:80px><span class=hint>从源片此刻(秒)开始连续抠像,并在此帧框选人物;应 ≤ 最早分段起点。留空=自动取最早分段起点</span></div>
   <div class=optrow><b>抠像方式</b><input value="${(CFG.providers||{}).matte||'local'}" onchange="CFG.providers.matte=this.value" list=provlist size=12><span class=hint>local=SAM2(GPU);product:*=付费</span></div>
-  <div class=optrow><b>SAM2 模型</b>${sel(['small','base_plus','large'],(CFG.segment=CFG.segment||{}).sam2_model||'large','CFG.segment.sam2_model')}<span class=hint>large 质量最好</span></div>
-  <div class=optrow><b>软边细化</b>${sel(['none','matanyone'],CFG.segment.refine||'none','CFG.segment.refine')}<span class=hint>matanyone=发丝/裙摆软边(GPU,更慢)</span></div>
+  <div class=optrow><b>SAM2 模型</b>${sel(['small','base_plus','large'],CFG.segment.sam2_model||'large','CFG.segment.sam2_model')}<span class=hint>large 质量最好</span></div>
+  <div class=optrow><b>软边细化</b>${sel(['none','matanyone'],CFG.segment.refine||'none','CFG.segment.refine')}<span class=hint>matanyone=发丝/裙摆软边(GPU,更慢,显著减虚影)</span></div>
   <div class=optrow><b>相机</b>${sel(['locked','auto','motion_2d'],CFG.camera.mode||'locked','CFG.camera.mode')}<span class=hint>三脚架/固定机位选 locked(零扭曲,人物原样);有运镜才用 motion_2d</span></div></div>`;
  // 人物(框选一次,用于整段连续抠像)
  h+=`<div class=sub><h3>人物(框选,只需一次)</h3>
@@ -824,6 +853,8 @@ function secRelight(){let r=CFG.relight=CFG.relight||{};return `<div class=sub><
  <p class=hint>真实重打光建议 provider=product 或本地接 IC-Light。</p></div>`;}
 function secComposite(){let c=CFG.compositing=CFG.compositing||{};let cb=(k,v)=>`<input type=checkbox ${v?'checked':''} onchange="CFG.compositing['${k}']=this.checked">`;
  return `<h2>5 · 细节 / 出片</h2><p class=phasehint>调真实感细节后合成出片。</p><div class=sub>
+ <div class=row><label>去边缘虚影</label>${cb('defringe',c.defringe!==false)} 外扩${num(c.defringe_band??6,'CFG.compositing.defringe_band')}px 收边${num(c.edge_erode??1,'CFG.compositing.edge_erode')}px
+  <span class=hint>消除人物边缘的旧背景光晕/虚影:用实心前景色重绘边缘带并轻微收边</span></div>
  <div class=row><label>光包裹</label>${cb('light_wrap',c.light_wrap!==false)} 强度${num(c.light_wrap_amount??0.5,'CFG.compositing.light_wrap_amount')}</div>
  <div class=row><label>接触阴影</label>${cb('contact_shadow',c.contact_shadow!==false)} 浓度${num(c.shadow_strength??0.45,'CFG.compositing.shadow_strength')}</div>
  <div class=row><label>颗粒</label>${cb('grain',c.grain!==false)} 强度${num(c.grain_sigma??3.0,'CFG.compositing.grain_sigma')}</div>
@@ -847,7 +878,9 @@ async function runSteps(steps){await save();
 async function runTool(tool,name){await save();
  await fetch('/api/run_tool',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({tool,name})});poll();}
 
-function _spanStart(){let segs=CFG.segments||[];let ts=segs.map(s=>s.time&&s.time[0]).filter(v=>v!=null);
+function _spanStart(){let ms=(CFG.segment||{}).matte_start;
+ if(ms!=null&&ms!==''&&!isNaN(+ms))return +ms;
+ let segs=CFG.segments||[];let ts=segs.map(s=>s.time&&s.time[0]).filter(v=>v!=null);
  return ts.length?Math.min(...ts):2;}
 function pickBox(i){  // 框选人物(整段连续抠像的首帧目标),默认用跨度起始时刻
  openPicker(CFG.input.source,'rect',_spanStart(),(box)=>{CFG.persons[i].box=box;renderAll();showTab('p2');});}
@@ -892,10 +925,15 @@ async function refresh(){let j=await (await fetch('/api/status')).json();
  if(j.clips&&Object.keys(j.clips).length){o+='<h3>片段产物</h3>';
   for(const c in j.clips)o+=`<div class="${j.clips[c]?'ok':'no'}">${j.clips[c]?'✓':'—'} ${c}.mp4</div>`;}
  if(G('outs'))G('outs').innerHTML=o;}
-async function poll(){let j=await (await fetch('/api/run/log')).json();let l=G('log');
- l.textContent=j.log.join('\n');l.scrollTop=l.scrollHeight;
- G('runflag').textContent=j.running?'(运行中…)':'(空闲)';
- if(j.running)setTimeout(poll,1000);else{refresh();renderAll();}}
+let _pollTimer=null,_pollWasRunning=false;
+async function poll(){
+ clearTimeout(_pollTimer);_pollTimer=null;   // 单飞:任何时刻只有一条轮询链,避免堆叠卡死
+ let j;try{j=await (await fetch('/api/run/log')).json();}catch(e){_pollTimer=setTimeout(poll,2000);return;}
+ let l=G('log');if(l){l.textContent=j.log.join('\n');l.scrollTop=l.scrollHeight;}
+ let rf=G('runflag');if(rf)rf.textContent=j.running?'(运行中…)':'(空闲)';
+ if(j.running){_pollWasRunning=true;_pollTimer=setTimeout(poll,1200);}
+ else if(_pollWasRunning){_pollWasRunning=false;refresh();renderAll();}  // 仅在「运行→结束」时重绘一次
+ else refresh();}
 function _bar(label,pct,txt){return `<div class=resrow><span>${label}</span><div class=barbg>`+
  `<div class=bar style="width:${pct==null?0:Math.min(100,pct)}%"></div></div>`+
  `<span class=rv>${txt!=null?txt:(pct==null?'—':Math.round(pct)+'%')}</span></div>`;}

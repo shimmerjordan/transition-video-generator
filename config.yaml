@@ -22,11 +22,21 @@ persons:
   seed_point:
   - 685
   - 330
+  box:
+  - 981
+  - 289
+  - 1059
+  - 589
 - id: p1
   name: 女舞者
   seed_point:
   - 815
   - 360
+  box:
+  - 477
+  - 306
+  - 551
+  - 618
 garments:
   cloth1: cloth1.jpg
   cloth2: cloth2.jpg
@@ -130,6 +140,9 @@ relight:
   fallback: soft_match
   soft_strength: 0.25
 compositing:
+  defringe: true
+  defringe_band: 6
+  edge_erode: 1
   light_wrap: true
   light_wrap_amount: 0.5
   light_wrap_width: 4
