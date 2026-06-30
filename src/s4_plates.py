@@ -125,60 +125,46 @@ def _seg_cfg(cfg: dict, sid: int) -> dict:
     raise SystemExit(f"config.segments 中找不到段 {sid}")
 
 
-def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
-    n, (w, h) = _count_locked(work_root, sid)
-    scfg = _seg_cfg(cfg, sid)
-    clip_id = scfg.get("background_clip")
-    if not clip_id:
-        raise SystemExit(f"段 {sid} 未配置 background_clip")
-    # 优先使用「裁剪」步骤已生成的片段视频(已去水印+已裁剪)
-    clip_video = contract.clip_path(cfg.get("_root", "."), clip_id)
-    fps = get(cfg, "project.fps", 30)
+def clip_plate(cfg: dict, clip_id: str, n: int, size: tuple, root: str,
+               ground: str = "as_is") -> list:
+    """把某背景片段做成 n 帧锁定平面(读片段/原片→去自身运镜→fit→地面→pingpong 到 n 帧)。"""
+    w, h = size
+    clip_video = contract.clip_path(root, clip_id)
     if os.path.isfile(clip_video):
         raw = list(video.read_frames(clip_video))
-        if not raw:
-            raise SystemExit(f"段 {sid} 片段视频读到 0 帧:{clip_video}")
-        fps = video.video_info(clip_video)["fps"] or fps
-        print(f"[s4] 段 {sid}: 使用已生成片段 {clip_id}.mp4({len(raw)} 帧)")
     else:
         bg_path, rng, cleanup = resolve_clip(cfg, clip_id)
         if not os.path.isfile(bg_path):
-            raise SystemExit(f"段 {sid} 背景文件不存在:{bg_path}")
+            raise SystemExit(f"背景文件不存在:{bg_path}")
         info = video.video_info(bg_path)
         fps = info["fps"] or get(cfg, "project.fps", 30)
         start_f = int(round(float(rng[0]) * fps)) if rng and rng[0] else 0
         raw = list(video.read_frames(bg_path, start=start_f, count=None))
         if rng and len(rng) > 1 and rng[1]:
             raw = raw[:max(1, int(round(float(rng[1]) * fps)) - start_f)]
-        if not raw:
-            raise SystemExit(f"段 {sid} 背景片段 {clip_id} 读到 0 帧")
-        # 现场去静态元素(若未走「去水印」步骤)
-        mask = build_cleanup_mask(raw[0].shape, cleanup)
+        mask = build_cleanup_mask(raw[0].shape, cleanup) if raw else None
         if mask is not None:
             raw = [cv2.inpaint(f, mask, 3, cv2.INPAINT_TELEA) for f in raw]
-        if cleanup.get("movers"):
-            print(f"[s4] 段 {sid}: movers 需 provider=product 视频修复,本地跳过")
-
-    # 2) 去自身运镜 → 锁定平面;3) fit;4) 地面策略
+    if not raw:
+        raise SystemExit(f"片段 {clip_id} 读到 0 帧")
     transforms = track_segment(raw) if len(raw) > 1 else [None]
     locked_bg = stabilize(raw, transforms) if len(raw) > 1 else raw
-    ground = scfg.get("ground", "as_is")
     if ground == "generate":
-        print(f"[s4] 段 {sid}: ground=generate 需生成式(provider),本地回退 as_is")
+        print(f"[s4] {clip_id}: ground=generate 需生成式(provider),本地回退 as_is")
     locked_bg = [apply_ground(fit_cover(f, (w, h)), ground) for f in locked_bg]
-    plates = pingpong(locked_bg, n)
+    return pingpong(locked_bg, n)
 
-    out_dir = contract.seg_dir(resolve_path(cfg, "."), "plates", sid)
+
+def _write_plate(cfg, work_root, sid, plates, w, h, clip_id, ground, scfg):
+    out_dir = contract.seg_dir(cfg.get("_root", "."), "plates", sid)
     video.ensure_dir(out_dir)
     for i, f in enumerate(plates):
         video.imwrite(os.path.join(out_dir, f"f{i:05d}.png"), f)
     contract.write_manifest(out_dir, step="plates", segment=sid, kind="frames",
-                            fps=float(fps), width=w, height=h, count=len(plates),
-                            background_clip=clip_id, ground=ground)
-
-    # 光照(配置覆盖优先)
+                            fps=float(get(cfg, "project.fps", 30)), width=w, height=h,
+                            count=len(plates), background_clip=clip_id, ground=ground)
     light = estimate_light(plates[0])
-    lc = scfg.get("light", {}) or {}
+    lc = (scfg or {}).get("light", {}) or {}
     if lc.get("direction") not in (None, "auto"):
         light["azimuth_deg"], light["elevation_deg"] = float(lc["direction"][0]), float(lc["direction"][1])
     if lc.get("color_temp") not in (None, "auto"):
@@ -187,9 +173,58 @@ def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
         light["intensity"] = float(lc["intensity"])
     with open(os.path.join(work_root, "plates", f"seg_{sid}.light.json"), "w", encoding="utf-8") as f:
         json.dump(light, f, ensure_ascii=False, indent=2)
+    return out_dir
 
-    print(f"[s4] 段 {sid}: {len(plates)} 帧 plate ← {clip_id}"
-          f"(ground={ground},{light['color_temp_hint']})")
+
+def build_timeline_plate(cfg: dict, sid: int, work_root: str, span_start: float,
+                         segments: list, log=print) -> int:
+    """★整段连续抠像配套:为段 sid 的全部锁定帧,按各背景时间区间切换,拼出一条整长 plate。"""
+    n, (w, h) = _count_locked(work_root, sid)
+    fps = float(get(cfg, "project.fps", 30))
+    root = cfg.get("_root", ".")
+    plate = [None] * n
+    for seg in segments:
+        clip = seg.get("background_clip")
+        t = seg.get("time")
+        if not clip or not t:
+            continue
+        i0 = max(0, int(round((float(t[0]) - span_start) * fps)))
+        i1 = min(n, int(round((float(t[1]) - span_start) * fps)))
+        cnt = i1 - i0
+        if cnt <= 0:
+            continue
+        frames = clip_plate(cfg, clip, cnt, (w, h), root, seg.get("ground", "as_is"))
+        for j in range(cnt):
+            plate[i0 + j] = frames[j]
+        log(f"[s4] 背景切换 [{t[0]}~{t[1]}s] ← {clip}({cnt} 帧)")
+    # 填补未覆盖帧(前向/后向最近)
+    last = None
+    for i in range(n):
+        if plate[i] is None:
+            plate[i] = last
+        else:
+            last = plate[i]
+    nxt = None
+    for i in range(n - 1, -1, -1):
+        if plate[i] is None:
+            plate[i] = nxt if nxt is not None else np.zeros((h, w, 3), np.uint8)
+        else:
+            nxt = plate[i]
+    _write_plate(cfg, work_root, sid, plate, w, h, "timeline", "as_is", None)
+    log(f"[s4] 段 {sid}: 整长 plate {n} 帧(按时间线切换背景)")
+    return n
+
+
+def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
+    n, (w, h) = _count_locked(work_root, sid)
+    scfg = _seg_cfg(cfg, sid)
+    clip_id = scfg.get("background_clip")
+    if not clip_id:
+        raise SystemExit(f"段 {sid} 未配置 background_clip")
+    ground = scfg.get("ground", "as_is")
+    plates = clip_plate(cfg, clip_id, n, (w, h), cfg.get("_root", "."), ground)
+    out_dir = _write_plate(cfg, work_root, sid, plates, w, h, clip_id, ground, scfg)
+    print(f"[s4] 段 {sid}: {len(plates)} 帧 plate ← {clip_id}(ground={ground})")
     return {"segment": sid, "frames": len(plates), "plate_dir": out_dir, "clip": clip_id}
 
 

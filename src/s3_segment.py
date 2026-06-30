@@ -111,13 +111,19 @@ def matte_sam2(cfg: dict, frames: list[np.ndarray], persons: list[dict],
             # 支持每人多个正点(seed_points 列表)或单点(seed_point);相邻舞者用多正点比负点更稳
             valid = []
             for k, p in enumerate(persons):
+                box = p.get("box")
                 pts = p.get("seed_points") or ([p["seed_point"]] if p.get("seed_point") else [])
-                if not pts:
+                if box and len(box) == 4:
+                    predictor.add_new_points_or_box(
+                        inference_state=state, frame_idx=0, obj_id=k,
+                        box=np.array(box, dtype=np.float32))
+                elif pts:
+                    predictor.add_new_points_or_box(
+                        inference_state=state, frame_idx=0, obj_id=k,
+                        points=np.array(pts, dtype=np.float32),
+                        labels=np.ones(len(pts), dtype=np.int32))
+                else:
                     continue
-                predictor.add_new_points_or_box(
-                    inference_state=state, frame_idx=0, obj_id=k,
-                    points=np.array(pts, dtype=np.float32),
-                    labels=np.ones(len(pts), dtype=np.int32))
                 valid.append((k, p.get("id", f"p{k}")))
 
             per_obj = {k: [None] * len(frames) for k, _ in valid}
