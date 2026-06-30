@@ -96,18 +96,25 @@ def composite_frame(subject, plate, alpha, cfg) -> np.ndarray:
 
 
 def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
-    relit_dir = os.path.join(work_root, "relit", f"seg_{sid}")
     alpha_dir = os.path.join(work_root, "alpha", f"seg_{sid}")
     plate_dir = os.path.join(work_root, "plates", f"seg_{sid}")
     out_dir = os.path.join(work_root, "comp_locked", f"seg_{sid}")
     video.ensure_dir(out_dir)
 
-    names = [os.path.basename(p) for p in sorted(glob.glob(os.path.join(relit_dir, "f*.png")))]
-    if not names:
-        raise SystemExit(f"段 {sid} 缺少 relit 帧,请先运行 S6")
+    # 主体层来源:重打光 > 换装 > 锁定原片(只换背景时回退原片人物)
+    subject_dir = subject_kind = None
+    for cand in ("relit", "garment", "locked"):
+        d = os.path.join(work_root, cand, f"seg_{sid}")
+        if glob.glob(os.path.join(d, "f*.png")):
+            subject_dir, subject_kind = d, cand
+            break
+    if subject_dir is None:
+        raise SystemExit(f"段 {sid} 缺少主体帧(locked/garment/relit 都没有),请先运行 S2/S3")
+    print(f"[s7] 段 {sid}: 主体层用 {subject_kind}")
+    names = [os.path.basename(p) for p in sorted(glob.glob(os.path.join(subject_dir, "f*.png")))]
 
     for name in names:
-        subject = video.imread(os.path.join(relit_dir, name))
+        subject = video.imread(os.path.join(subject_dir, name))
         alpha = video.imread(os.path.join(alpha_dir, name), cv2.IMREAD_GRAYSCALE)
         plate = video.imread(os.path.join(plate_dir, name))
         if alpha is None:
@@ -126,11 +133,12 @@ def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
 def run(config_path: str | None, only_segment: int | None) -> list[dict]:
     cfg = load_config(config_path)
     work_root = resolve_path(cfg, "data/work")
-    relit_root = os.path.join(work_root, "relit")
-    if not os.path.isdir(relit_root):
-        raise SystemExit("缺少 data/work/relit,请先运行 S6")
+    # 段集合取自 alpha(抠像已出)即可合成;主体层在 process_segment 里回退
+    base = os.path.join(work_root, "alpha")
+    if not os.path.isdir(base):
+        raise SystemExit("缺少 data/work/alpha,请先运行抠像(S3)")
     sids = sorted(int(os.path.basename(d).split("_")[1])
-                  for d in glob.glob(os.path.join(relit_root, "seg_*")))
+                  for d in glob.glob(os.path.join(base, "seg_*")))
     if only_segment is not None:
         sids = [s for s in sids if s == only_segment]
     results = [process_segment(cfg, s, work_root) for s in sids]

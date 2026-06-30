@@ -301,6 +301,62 @@ def run_log():
     return {"running": RUN["running"], "log": RUN["log"][-500:]}
 
 
+def _build_beats(cfg: dict, log) -> int:
+    """从 config.segments[].time(起止秒)生成 data/work/beats.json,供换背景流程使用。"""
+    import json
+    fps = float(get(cfg, "project.fps", 30))
+    segs = []
+    for i, s in enumerate(get(cfg, "segments", []) or []):
+        t = s.get("time")
+        if not t or len(t) < 2 or float(t[1]) <= float(t[0]):
+            continue
+        st, en = float(t[0]), float(t[1])
+        segs.append({"id": s.get("id", i), "start_time": st, "end_time": en,
+                     "start_frame": int(st * fps), "end_frame": int(en * fps),
+                     "duration": round(en - st, 3)})
+    bp = os.path.join(contract.work_root(ROOT), "beats.json")
+    os.makedirs(os.path.dirname(bp), exist_ok=True)
+    with open(bp, "w", encoding="utf-8") as f:
+        json.dump({"bpm": 0, "fps": fps,
+                   "audio_duration": max((x["end_time"] for x in segs), default=0),
+                   "source": "manual", "cut_times": [], "segments": segs}, f,
+                  ensure_ascii=False, indent=2)
+    log(f"[换背景] 生成 beats:{len(segs)} 段")
+    return len(segs)
+
+
+@app.post("/api/run_swap")
+async def run_swap(req: Request):
+    if RUN["running"]:
+        return {"ok": False, "error": "已有任务在运行"}
+    body = await req.json()
+    seg = str(body.get("segment", "")).strip()
+    segment = int(seg) if seg else None
+
+    def worker():
+        RUN.update(running=True, log=[], progress=0.0, t0=time.time(), task="换背景")
+        os.environ["HF_HUB_OFFLINE"] = "1"   # 模型均在本地,避免联网检查卡顿
+        lg = lambda m: RUN["log"].append(str(m))
+        try:
+            cfg = load_config(CONFIG_PATH)
+            if _build_beats(cfg, lg) == 0:
+                lg("[换背景] 没有有效分段(请在「分段」表里设每段起止秒)"); return
+            from src import preprocess
+            try:
+                preprocess.run_clips(cfg, ROOT, None, log=lg)   # 生成片段(去水印后优先)
+            except Exception as e:
+                lg(f"[换背景] 片段生成跳过:{e}")
+            pipeline.run(CONFIG_PATH, segment, {2, 3, 4, 7, 8}, log=lg)
+        except Exception:
+            lg("ERROR:\n" + traceback.format_exc())
+        finally:
+            RUN["running"] = False
+            RUN["progress"] = None
+
+    threading.Thread(target=worker, daemon=True).start()
+    return {"ok": True}
+
+
 @app.get("/api/resources")
 def resources():
     try:
@@ -480,7 +536,7 @@ function renderAll(){
  G('t_clip').innerHTML=secInputs()+secClips();
  G('t_wm').innerHTML=secWatermark();
  G('t_p1').innerHTML=secTimeline();
- G('t_p2').innerHTML=secPersons()+secProvider('matte','抠像')+secGround()+runBtn('▶ 运行换背景','2,3,4,7,8');
+ G('t_p2').innerHTML=secBgSwap();
  G('t_p3').innerHTML=secProvider('garment','换装')+secGarmentSched()+runBtn('▶ 运行换装','5');
  G('t_p4').innerHTML=secProvider('relight','灯光')+secRelight()+runBtn('▶ 运行灯光','6');
  G('t_p5').innerHTML=secComposite()+runBtn('▶ 合成出片','7,8')+secFinal();
@@ -682,21 +738,49 @@ function applyTimeline(){let cuts=[...(CFG.beats.override_seconds||[])].sort((x,
   garments:o.garments||{},light:o.light||{direction:'auto',color_temp:'auto',intensity:'auto'}});}
  CFG.segments=ns;renderAll();showTab('p1');}
 
-/* ---- 阶段2:换背景 ---- */
-function secPersons(){CFG.persons=CFG.persons||[];
- let h=`<h2>2 · 换背景</h2><p class=phasehint>设人物(「取点」在源片上单击)。运行:运镜对齐→抠像→背景平面→合成→出片。</p>
- <div class=sub><h3>人物</h3><table><tr><th>id</th><th>名称</th><th>seed_point</th><th></th></tr>`;
+/* ---- 阶段2:换背景(输入/分段/预览/运行)---- */
+function _srcDur(){let inp=CFG.input||{};let name=(inp.source||'').split('/').pop();
+ return (ASSETS.videos.find(v=>v.name===name)||{}).duration||0;}
+function secBgSwap(){let inp=CFG.input=CFG.input||{};CFG.persons=CFG.persons||[];CFG.segments=CFG.segments||[];
+ CFG.camera=CFG.camera||{};let clips=['',...allClipIds()];let sdur=_srcDur();
+ let h=`<h2>4 · 换背景</h2><p class=phasehint>设定每段「时间段→背景」与人物取点 → 运行:抠像(SAM2/GPU)→ 背景平面 → 合成 → 出片。背景建议先在「去水印/裁剪」处理干净。原片人物保留(换装/打光在后续阶段)。</p>`;
+ // 输入
+ h+=`<div class=sub><h3>输入</h3>
+  <div class=optrow><b>源视频</b><input value="${inp.source||''}" onchange="CFG.input.source=this.value" size=34><span class=hint>${sdur?('时长 '+sdur+'s'):''}</span></div>
+  <div class=optrow><b>抠像方式</b><input value="${(CFG.providers||{}).matte||'local'}" onchange="CFG.providers.matte=this.value" list=provlist size=12><span class=hint>local=SAM2(GPU);product:*=付费</span></div>
+  <div class=optrow><b>相机</b>${sel(['auto','locked','motion_2d'],CFG.camera.mode||'auto','CFG.camera.mode')}<span class=hint>三脚架选 locked</span></div></div>`;
+ // 人物
+ h+=`<div class=sub><h3>人物(抠像取点;在源片上单击)</h3><table><tr><th>id</th><th>名称</th><th>seed_point</th><th></th></tr>`;
  CFG.persons.forEach((p,i)=>{h+=`<tr><td><input value="${p.id||''}" onchange="CFG.persons[${i}].id=this.value" size=4></td>
   <td><input value="${p.name||''}" onchange="CFG.persons[${i}].name=this.value" size=8></td>
   <td><input value="${(p.seed_point||[]).join(',')}" onchange="CFG.persons[${i}].seed_point=this.value.split(',').map(Number)" size=10>
    <button class=alt onclick=pickPoint(${i})>取点</button></td>
   <td><button class=alt onclick="CFG.persons.splice(${i},1);renderAll();showTab('p2')">删</button></td></tr>`;});
  h+=`</table><button onclick="CFG.persons.push({id:'p'+CFG.persons.length,name:'',seed_point:[0,0]});renderAll();showTab('p2')">+ 人物</button></div>`;
+ // 分段:时间→背景→地面
+ h+=`<div class=sub><h3>分段(时间段 → 背景)</h3><table><tr><th>段</th><th>起s</th><th>止s</th><th>背景</th><th>地面</th><th></th></tr>`;
+ CFG.segments.forEach((s,i)=>{if(!s.time)s.time=[0,Math.min(sdur||5,5)];
+  h+=`<tr><td>${s.id}</td>
+   <td><input type=number value="${s.time[0]}" onchange="CFG.segments[${i}].time[0]=+this.value" style=width:64px></td>
+   <td><input type=number value="${s.time[1]}" onchange="CFG.segments[${i}].time[1]=+this.value" style=width:64px></td>
+   <td>${sel(clips,s.background_clip||'',`CFG.segments[${i}].background_clip`)}</td>
+   <td>${sel(['as_is','generate','virtual_plane'],s.ground||'as_is',`CFG.segments[${i}].ground`)}</td>
+   <td><button class=alt onclick="CFG.segments.splice(${i},1);renderAll();showTab('p2')">删</button></td></tr>`;});
+ h+=`</table><button onclick="bgSwapAddSeg()">+ 段</button></div>`;
+ // 预览
+ let pv=inp.source?`/api/frame_at?file=${encodeURIComponent(inp.source)}&t=2&_=${Date.now()}`:'';
+ h+=`<div class=sub><h3>预览</h3><div class=mediarow>
+   <div><div class=medialbl>源片(取点参考)</div><img class=media src="${pv}"></div>
+   <div><div class=medialbl>成片(运行后)</div><video class=media controls src="/api/final?_=${Date.now()}"></video></div></div></div>`;
+ // 运行
+ h+=`<div class=row><span>处理段(留空=全部):</span><input id=swapseg size=4 placeholder=all>
+   <button class=go onclick="runSwap()">▶ 运行换背景</button><span class=hint>右侧看 GPU/进度</span></div>`;
  return h;}
-function secGround(){CFG.segments=CFG.segments||[];let h='<div class=sub><h3>每段地面策略</h3>';
- if(!CFG.segments.length)h+='<span class=hint>先在「时间线」建分段</span>';
- CFG.segments.forEach((s,i)=>{h+=`<div class=row><label>段${s.id}</label>${sel(['as_is','generate','virtual_plane'],s.ground||'as_is',`CFG.segments[${i}].ground`)}</div>`;});
- return h+'</div>';}
+function bgSwapAddSeg(){let sd=_srcDur();let clips=allClipIds();
+ CFG.segments.push({id:CFG.segments.length,time:[0,Math.min(sd||5,5)],background_clip:clips[0]||'',
+  ground:'as_is',garments:{},light:{direction:'auto',color_temp:'auto',intensity:'auto'}});renderAll();showTab('p2');}
+async function runSwap(){await save();
+ await fetch('/api/run_swap',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({segment:G('swapseg').value})});poll();}
 
 /* ---- 阶段3:换装 ---- */
 function secGarmentSched(){CFG.garments=CFG.garments||{};CFG.segments=CFG.segments||[];

@@ -133,10 +133,12 @@ def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
         raise SystemExit(f"段 {sid} 未配置 background_clip")
     # 优先使用「裁剪」步骤已生成的片段视频(已去水印+已裁剪)
     clip_video = contract.clip_path(cfg.get("_root", "."), clip_id)
+    fps = get(cfg, "project.fps", 30)
     if os.path.isfile(clip_video):
         raw = list(video.read_frames(clip_video))
         if not raw:
             raise SystemExit(f"段 {sid} 片段视频读到 0 帧:{clip_video}")
+        fps = video.video_info(clip_video)["fps"] or fps
         print(f"[s4] 段 {sid}: 使用已生成片段 {clip_id}.mp4({len(raw)} 帧)")
     else:
         bg_path, rng, cleanup = resolve_clip(cfg, clip_id)
@@ -187,7 +189,7 @@ def process_segment(cfg: dict, sid: int, work_root: str) -> dict:
         json.dump(light, f, ensure_ascii=False, indent=2)
 
     print(f"[s4] 段 {sid}: {len(plates)} 帧 plate ← {clip_id}"
-          f"(去元素 {'有' if mask is not None else '无'},ground={ground},{light['color_temp_hint']})")
+          f"(ground={ground},{light['color_temp_hint']})")
     return {"segment": sid, "frames": len(plates), "plate_dir": out_dir, "clip": clip_id}
 
 

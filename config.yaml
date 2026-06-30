@@ -37,11 +37,11 @@ backgrounds:
     - id: meadow_a
       range:
       - 10
-      - 18
+      - 17.6
     - id: meadow_b
       range:
-      - 60
-      - 70
+      - 52.7
+      - 62.7
     cleanup:
       watermarks:
       - - 1058
@@ -55,6 +55,17 @@ backgrounds:
         - 720
       movers: []
       regions: []
+      marks:
+      - id: mark0
+        kind: watermarks
+        range:
+        - 0
+        - 143
+        rect:
+        - 1051
+        - 16
+        - 1263
+        - 75
   night:
     file: bg2.mp4
     clips:
@@ -90,7 +101,6 @@ camera:
 segment:
   method: sam2
   diff_thresh: 28
-# 去水印引擎:lama(GPU,质量最好、无幻觉,推荐)| cv2(快,小logo)| sd(GPU扩散,实验性)
 dewatermark:
   engine: lama
   model: Lykon/dreamshaper-8-inpainting
@@ -98,7 +108,8 @@ dewatermark:
   steps: 25
   guidance: 8
   prompt: clean background, seamless, photorealistic, empty
-  negative: text, letters, words, watermark, logo, characters, signature, writing, symbols, numbers
+  negative: text, letters, words, watermark, logo, characters, signature, writing,
+    symbols, numbers
 relight:
   fallback: soft_match
   soft_strength: 0.25
