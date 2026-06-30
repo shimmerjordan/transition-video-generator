@@ -512,7 +512,7 @@ textarea{width:100%;height:430px;background:#0d1016;color:var(--txt);border:1px 
   <button class=alt onclick="G('picker').style.display='none'">关闭</button></div>
  <p class=hint id=pkhint></p>
  <div id=pkwrap style="position:relative;display:inline-block;line-height:0">
-  <img id=pkimg><div id=pkrect style="position:absolute;border:2px solid #3df;background:rgba(60,200,255,.18);display:none;pointer-events:none"></div></div>
+  <img id=pkimg draggable=false style="-webkit-user-drag:none;user-select:none;touch-action:none;cursor:crosshair;max-width:90vw"><div id=pkrect style="position:absolute;border:2px solid #3df;background:rgba(60,200,255,.18);display:none;pointer-events:none"></div></div>
 </div></div>
 <script>
 const G=id=>document.getElementById(id);
@@ -859,17 +859,21 @@ function openPicker(file,mode,t,cb){_picker={file,mode,cb,st:null};G('pkfile').v
 function loadPickFrame(){G('pkimg').src='/api/frame_at?file='+encodeURIComponent(G('pkfile').value)+'&t='+(G('pktime').value||0)+'&_='+Date.now();
  G('pkrect').style.display='none';_picker.st=null;}
 function _pkXY(e){let img=G('pkimg'),r=img.getBoundingClientRect();
- return {dx:e.clientX-r.left,dy:e.clientY-r.top,r,img,
-   ox:(e.clientX-r.left)*img.naturalWidth/r.width,oy:(e.clientY-r.top)*img.naturalHeight/r.height};}
+ let dx=Math.max(0,Math.min(r.width,e.clientX-r.left)),dy=Math.max(0,Math.min(r.height,e.clientY-r.top));
+ return {dx,dy,r,img,ox:dx*img.naturalWidth/r.width,oy:dy*img.naturalHeight/r.height};}
 (function(){
  let img=G('pkimg');if(!img)return;
- img.addEventListener('pointerdown',e=>{if(!_picker)return;let p=_pkXY(e);
+ img.addEventListener('dragstart',e=>e.preventDefault());
+ img.addEventListener('pointerdown',e=>{if(!_picker)return;e.preventDefault();
+   try{img.setPointerCapture(e.pointerId);}catch(_){}
+   let p=_pkXY(e);
    if(_picker.mode=='point'){_picker.cb(Math.round(p.ox),Math.round(p.oy));G('picker').style.display='none';return;}
    _picker.st=p;let rc=G('pkrect');rc.style.display='block';rc.style.left=p.dx+'px';rc.style.top=p.dy+'px';rc.style.width='0px';rc.style.height='0px';});
- img.addEventListener('pointermove',e=>{if(!_picker||!_picker.st)return;let p=_pkXY(e);let s=_picker.st;let rc=G('pkrect');
+ img.addEventListener('pointermove',e=>{if(!_picker||!_picker.st)return;e.preventDefault();let p=_pkXY(e);let s=_picker.st;let rc=G('pkrect');
    rc.style.left=Math.min(s.dx,p.dx)+'px';rc.style.top=Math.min(s.dy,p.dy)+'px';
    rc.style.width=Math.abs(p.dx-s.dx)+'px';rc.style.height=Math.abs(p.dy-s.dy)+'px';});
- img.addEventListener('pointerup',e=>{if(!_picker||!_picker.st)return;let p=_pkXY(e);let s=_picker.st;_picker.st=null;
+ img.addEventListener('pointerup',e=>{if(!_picker||!_picker.st)return;e.preventDefault();let p=_pkXY(e);let s=_picker.st;_picker.st=null;
+   try{img.releasePointerCapture(e.pointerId);}catch(_){}
    let x0=Math.round(Math.min(s.ox,p.ox)),y0=Math.round(Math.min(s.oy,p.oy)),x1=Math.round(Math.max(s.ox,p.ox)),y1=Math.round(Math.max(s.oy,p.oy));
    if(x1-x0<8||y1-y0<8){G('pkrect').style.display='none';return;}
    _picker.cb([x0,y0,x1,y1]);G('picker').style.display='none';});
